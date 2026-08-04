@@ -11,7 +11,8 @@
 - 產生原始逐字稿 `.txt`
 - 產生逐字稿 `.docx`
 - 支援使用者回覆 `Speaker 1 = 王經理` 來替換主講人名稱
-- 可選擇再用 OpenAI 把逐字稿潤飾成正式稿
+- 預設以本機 Ollama 免費潤稿，將逐字稿整理成正式繁體中文
+- 也可選擇 OpenAI 作為雲端潤稿供應商
 
 ## 系統需求
 
@@ -19,7 +20,9 @@
 - ffmpeg
 - Telegram Bot Token
 - Deepgram API Key
-- OpenAI API Key，可選，只有 `ENABLE_POLISH=true` 時需要
+- Ollama（預設本機免費潤稿；建議模型：Qwen3 8B）
+- OpenAI API Key，可選，只有使用 OpenAI 潤稿或 OpenAI 轉錄時需要
+- SMTP 寄件帳號，可選，只有要寄送 Email 附件時需要
 
 ## 安裝
 
@@ -44,9 +47,43 @@ py -3 -m pip install -e .
 TELEGRAM_BOT_TOKEN=你的_telegram_bot_token
 DEEPGRAM_API_KEY=你的_deepgram_api_key
 TRANSCRIBE_PROVIDER=deepgram
-ENABLE_POLISH=false
+ENABLE_POLISH=true
+POLISH_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_TEXT_MODEL=qwen3:8b
 DATA_DIR=./data
 MAX_AUDIO_MB=50
+ENABLE_PYANNOTE_DIARIZATION=false
+PYANNOTE_HF_TOKEN=
+PYANNOTE_NUM_SPEAKERS=0
+```
+
+## 本機多人語者分離（pyannote.audio，可選）
+
+啟用後由 pyannote.audio 依聲音特徵分群，再以 Deepgram 產生的中文詞級時間戳套用 Speaker 標籤。這不需要主講人在錄音中自我介紹；系統只會產生通用的 `Speaker 1`、`Speaker 2` 等標籤。
+
+1. 建立 Hugging Face 帳號，並接受 [`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1) 的使用條款。
+2. 建立具有讀取權限的 Hugging Face Token。
+3. 使用 Python 3.11+ 建立虛擬環境並安裝選用套件：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[pyannote]"
+```
+
+4. 在 `.env` 設定：
+
+```env
+TRANSCRIBE_PROVIDER=deepgram
+ENABLE_PYANNOTE_DIARIZATION=true
+PYANNOTE_HF_TOKEN=你的_Hugging_Face_Token
+PYANNOTE_NUM_SPEAKERS=4
+```
+
+`PYANNOTE_NUM_SPEAKERS=0` 代表讓模型自行估計人數；已確定是四人會議時可設為 `4`。啟用後請以虛擬環境啟動 Bot：
+
+```powershell
+.\.venv\Scripts\python.exe -m transcript_bot.main
 ```
 
 如果之後要改回 OpenAI 轉錄：
@@ -57,10 +94,51 @@ OPENAI_API_KEY=你的_openai_api_key
 OPENAI_TRANSCRIBE_MODEL=gpt-4o-transcribe-diarize
 ```
 
-如果要把 Deepgram 產生的逐字稿再交給 OpenAI 整理成正式稿：
+## 本機免費潤稿（Ollama，預設）
+
+安裝 Ollama 後，下載一次模型即可離線使用；逐字稿不會傳送到雲端：
+
+```powershell
+ollama pull qwen3:8b
+```
+
+`.env` 使用以下設定：
 
 ```env
 ENABLE_POLISH=true
+POLISH_PROVIDER=ollama
+OLLAMA_TEXT_MODEL=qwen3:8b
+```
+
+## 改用 OpenAI 潤稿（可選、依 API 用量計費）
+
+```env
+ENABLE_POLISH=true
+POLISH_PROVIDER=openai
+OPENAI_API_KEY=你的_openai_api_key
+OPENAI_TEXT_MODEL=gpt-4.1-mini
+```
+
+## 寄送至指定 Email（可選）
+
+設定 SMTP 後，使用者每次輸出 TXT 或 DOCX 後，可直接在 Telegram 回覆不同的收件 Email；回覆「略過」則不寄送。寄件帳號只設定在伺服器的 `.env`：
+
+```env
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=你的寄件帳號
+SMTP_PASSWORD=你的SMTP應用程式密碼
+SMTP_FROM=你的寄件帳號
+SMTP_USE_TLS=true
+```
+
+請使用服務商提供的 SMTP 應用程式密碼，不要使用一般登入密碼。
+
+如果要把 Deepgram 產生的逐字稿再交給 OpenAI 整理成正式稿，設定如下：
+
+```env
+ENABLE_POLISH=true
+POLISH_PROVIDER=openai
 OPENAI_API_KEY=你的_openai_api_key
 OPENAI_TEXT_MODEL=gpt-4.1-mini
 ```

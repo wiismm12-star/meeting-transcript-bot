@@ -13,11 +13,11 @@ class DeepgramError(RuntimeError):
     pass
 
 
-def transcribe_with_deepgram(audio_path: Path) -> list[TranscriptSegment]:
+def transcribe_with_deepgram(audio_path: Path, word_timestamps: bool = False) -> list[TranscriptSegment]:
     params = {
         "model": "nova-3",
         "smart_format": "true",
-        "diarize": "true",
+        "diarize_model": "latest",
         "utterances": "true",
         "language": "zh",
     }
@@ -39,6 +39,8 @@ def transcribe_with_deepgram(audio_path: Path) -> list[TranscriptSegment]:
         raise DeepgramError(_format_deepgram_error(response))
 
     payload = response.json()
+    if word_timestamps:
+        return _parse_words(payload, use_deepgram_speakers=False)
     segments = _parse_utterances(payload)
     if segments:
         return segments
@@ -65,7 +67,7 @@ def _parse_utterances(payload: dict[str, Any]) -> list[TranscriptSegment]:
     return segments
 
 
-def _parse_words(payload: dict[str, Any]) -> list[TranscriptSegment]:
+def _parse_words(payload: dict[str, Any], use_deepgram_speakers: bool = True) -> list[TranscriptSegment]:
     channels = payload.get("results", {}).get("channels") or []
     if not channels:
         return []
@@ -78,6 +80,18 @@ def _parse_words(payload: dict[str, Any]) -> list[TranscriptSegment]:
     if not words:
         transcript = str(alternatives[0].get("transcript") or "").strip()
         return [TranscriptSegment("Speaker 1", None, None, transcript)] if transcript else []
+
+    if not use_deepgram_speakers:
+        return [
+            TranscriptSegment(
+                speaker="UNASSIGNED",
+                start=_to_float(word.get("start")),
+                end=_to_float(word.get("end")),
+                text=str(word.get("punctuated_word") or word.get("word") or "").strip(),
+            )
+            for word in words
+            if str(word.get("punctuated_word") or word.get("word") or "").strip()
+        ]
 
     segments: list[TranscriptSegment] = []
     current_speaker: str | None = None
@@ -107,7 +121,7 @@ def _parse_words(payload: dict[str, Any]) -> list[TranscriptSegment]:
 
 def _format_deepgram_error(response: httpx.Response) -> str:
     if response.status_code in {401, 403}:
-        return "Deepgram API 認證失敗，請確認伺服器端 API key 設定。"
+        return "Deepgram API 驗證失敗，請確認伺服器端 API 金鑰設定。"
     if response.status_code == 429:
         return "Deepgram API 暫時達到用量或速率限制，請稍後再試。"
     if response.status_code >= 500:

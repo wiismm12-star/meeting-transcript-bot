@@ -21,6 +21,11 @@ def transcribe_with_diarization(audio_path: Path) -> list[TranscriptSegment]:
     if settings.transcribe_provider == "deepgram":
         from transcript_bot.deepgram import transcribe_with_deepgram
 
+        if settings.enable_pyannote_diarization:
+            from transcript_bot.pyannote_diarization import apply_pyannote_speakers, diarize_with_pyannote
+
+            transcript_segments = transcribe_with_deepgram(audio_path, word_timestamps=True)
+            return apply_pyannote_speakers(transcript_segments, diarize_with_pyannote(audio_path))
         return transcribe_with_deepgram(audio_path)
 
     client = OpenAI(api_key=settings.openai_api_key)

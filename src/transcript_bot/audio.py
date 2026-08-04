@@ -22,8 +22,6 @@ def normalize_audio(input_path: Path, output_path: Path) -> None:
         "-i",
         str(input_path),
         "-vn",
-        "-ac",
-        "1",
         "-ar",
         "16000",
         "-b:a",

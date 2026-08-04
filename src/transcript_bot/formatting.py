@@ -7,6 +7,7 @@ from openai import OpenAI
 from opencc import OpenCC
 
 from transcript_bot.config import settings
+from transcript_bot.ollama_client import polish_with_ollama
 from transcript_bot.transcription import TranscriptSegment
 
 
@@ -14,6 +15,11 @@ _OPENCC = OpenCC("s2twp")
 _FILLER_PATTERN = re.compile(
     r"(?<!\w)(?:呃+|嗯+|啊+|喔+|哦+|欸+|誒+|囈+|呃呃|嗯嗯|那個|這個)(?!\w)"
 )
+_LEADING_FILLER_PATTERN = re.compile(r"(?<=[:：])\s*(?:呃+|嗯+|啊+|喔+|哦+|欸+|誒+)\s*[，、]?\s*")
+_CJK_TOKEN_SPACE_PATTERN = re.compile(r"(?<=[\u4e00-\u9fff0-9])\s+(?=[\u4e00-\u9fff0-9])")
+_CONFIRMED_ASR_CORRECTIONS = {
+    "首扶梯": "手扶梯",
+}
 
 
 def normalize_speaker_labels(segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
@@ -87,7 +93,12 @@ def polish_local_transcript(text: str) -> str:
 
 def clean_text(text: str) -> str:
     text = _FILLER_PATTERN.sub("", text)
+    text = _LEADING_FILLER_PATTERN.sub("", text)
     text = to_traditional(text)
+    for source, replacement in _CONFIRMED_ASR_CORRECTIONS.items():
+        text = text.replace(source, replacement)
+    text = re.sub(r"^(Speaker\s+\d+)\s*[，:：]", r"\1：", text, flags=re.IGNORECASE)
+    text = _CJK_TOKEN_SPACE_PATTERN.sub("", text)
     text = text.replace("\u3000", " ")
     text = re.sub(r"\s+", " ", text)
     text = _FILLER_PATTERN.sub("", text)
@@ -103,6 +114,12 @@ def to_traditional(text: str) -> str:
 
 
 def polish_transcript(raw_transcript: str) -> str:
+    if settings.polish_provider == "ollama":
+        return polish_local_transcript(polish_with_ollama(raw_transcript))
+    return polish_with_openai(raw_transcript)
+
+
+def polish_with_openai(raw_transcript: str) -> str:
     client = OpenAI(api_key=settings.openai_api_key)
     prompt = f"""
 請將以下會議逐字稿整理成正式繁體中文會議文字稿。

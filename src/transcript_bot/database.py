@@ -236,6 +236,21 @@ def get_latest_meeting_id(data_dir: Path, user_id: int) -> str | None:
     return str(row["id"]) if row else None
 
 
+def delete_meeting(data_dir: Path, meeting_id: str, user_id: int) -> bool:
+    """Delete one user's meeting and its related database records.
+
+    Foreign-key cascades remove transcript segments and speaker aliases.  The
+    user filter is intentional: a meeting ID is not sufficient authority to
+    delete another Telegram user's data.
+    """
+    with _connect(data_dir) as conn:
+        result = conn.execute(
+            "DELETE FROM meetings WHERE id = ? AND user_id = ?",
+            (meeting_id, user_id),
+        )
+    return result.rowcount == 1
+
+
 def upsert_speaker_aliases(data_dir: Path, meeting_id: str, user_id: int, aliases: dict[str, str]) -> None:
     with _connect(data_dir) as conn:
         conn.executemany(
