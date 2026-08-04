@@ -174,17 +174,48 @@ def get_meeting_export(data_dir: Path, meeting_id: str, user_id: int) -> Meeting
             (meeting_id, user_id),
         ).fetchone()
 
+    return _meeting_export_from_row(row)
+
+
+def get_local_meeting_export(data_dir: Path, meeting_id: str) -> MeetingExportRecord | None:
+    """Read a meeting for the loopback-only local correction interface."""
+    with _connect(data_dir) as conn:
+        row = conn.execute(
+            """
+            SELECT id, user_id, created_at, transcript_text, transcript_txt_path, transcript_docx_path
+            FROM meetings
+            WHERE id = ?
+            """,
+            (meeting_id,),
+        ).fetchone()
+    return _meeting_export_from_row(row)
+
+
+def list_local_meeting_exports(data_dir: Path, limit: int = 100) -> list[MeetingExportRecord]:
+    """List recent meetings for a local-only interface on the owner machine."""
+    with _connect(data_dir) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, user_id, created_at, transcript_text, transcript_txt_path, transcript_docx_path
+            FROM meetings
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [meeting for row in rows if (meeting := _meeting_export_from_row(row))]
+
+
+def get_local_meeting_audio_path(data_dir: Path, meeting_id: str) -> Path | None:
+    with _connect(data_dir) as conn:
+        row = conn.execute(
+            "SELECT audio_file_path FROM meetings WHERE id = ?",
+            (meeting_id,),
+        ).fetchone()
     if not row:
         return None
-
-    return MeetingExportRecord(
-        id=str(row["id"]),
-        user_id=int(row["user_id"]),
-        created_at=str(row["created_at"]),
-        transcript_text=str(row["transcript_text"]),
-        transcript_txt_path=str(row["transcript_txt_path"]),
-        transcript_docx_path=str(row["transcript_docx_path"]),
-    )
+    path = Path(str(row["audio_file_path"]))
+    return path if path.is_file() else None
 
 
 def get_meeting_speaker_labels(data_dir: Path, meeting_id: str) -> list[str]:
@@ -331,3 +362,16 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
     columns = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _meeting_export_from_row(row: sqlite3.Row | None) -> MeetingExportRecord | None:
+    if not row:
+        return None
+    return MeetingExportRecord(
+        id=str(row["id"]),
+        user_id=int(row["user_id"]),
+        created_at=str(row["created_at"]),
+        transcript_text=str(row["transcript_text"]),
+        transcript_txt_path=str(row["transcript_txt_path"]),
+        transcript_docx_path=str(row["transcript_docx_path"]),
+    )

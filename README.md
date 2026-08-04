@@ -143,6 +143,16 @@ ENABLE_EMAIL_DELIVERY=true
 
 請使用服務商建立的 SMTP 應用程式密碼，不要填一般登入密碼。
 
+## 本機 Web 校稿
+
+啟動本機校稿介面：
+
+```powershell
+.\.venv\Scripts\python.exe -m transcript_bot.web
+```
+
+在這台電腦開啟 [http://127.0.0.1:8765](http://127.0.0.1:8765)。介面只綁定 loopback 位址，無法從同一網路的其他裝置連入；可直接編輯並儲存清理版逐字稿，並能點選原始段落跳至對應音檔時間。
+
 ## 資料保存與刪除
 
 - 資料庫、下載音檔與匯出檔均位於 `DATA_DIR`（預設 `./data`）。
@@ -157,6 +167,10 @@ ENABLE_EMAIL_DELIVERY=true
 ```
 
 GitHub Actions 會在每次 push 與 pull request 自動執行同一套測試。
+
+## 假資料範例
+
+公開展示用的逐字稿請只使用不含真實姓名、公司、聯絡方式或會議內容的假資料。可參考 [examples/demo_transcript.txt](examples/demo_transcript.txt)。
 
 ## 限制與安全提醒
 

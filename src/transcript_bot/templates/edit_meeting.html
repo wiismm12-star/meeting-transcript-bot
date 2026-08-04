@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}校稿：{{ meeting.id }}{% endblock %}
+{% block content %}
+  <p><a href="{{ url_for('index') }}">← 返回會議列表</a></p>
+  <h1>校稿逐字稿</h1>
+  <p class="meta">日期：{{ meeting.created_at }}<br>會議 ID：{{ meeting.id }}</p>
+  {% if saved %}<p class="notice">已儲存。下次從 Telegram 輸出清理版、會議紀錄或 Word 檔時會使用這份內容。</p>{% endif %}
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  {% if audio_available %}
+    <h2>音檔與原始段落</h2>
+    <audio id="meeting-audio" controls preload="metadata" src="{{ url_for('meeting_audio', meeting_id=meeting.id) }}"></audio>
+    <p class="meta">點選段落會從該段開始播放；原始段落僅供對照，修正請在下方文字稿完成。</p>
+    {% for segment in segments %}
+      <button class="segment" type="button" data-start="{{ segment.start }}">
+        <strong>{{ segment.speaker }}</strong> ・ {{ "%.1f"|format(segment.start) }} 秒<br>{{ segment.text }}
+      </button>
+    {% endfor %}
+  {% endif %}
+  <form method="post">
+    <label for="transcript_text">逐字稿內容</label>
+    <p><textarea id="transcript_text" name="transcript_text" required>{{ meeting.transcript_text }}</textarea></p>
+    <button type="submit">儲存修正</button>
+  </form>
+  <script>
+    const audio = document.getElementById("meeting-audio");
+    document.querySelectorAll(".segment").forEach((segment) => {
+      segment.addEventListener("click", () => {
+        audio.currentTime = Number(segment.dataset.start || 0);
+        audio.play();
+      });
+    });
+  </script>
+{% endblock %}

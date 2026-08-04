@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}本機逐字稿校稿{% endblock %}
+{% block content %}
+  <h1>本機逐字稿校稿</h1>
+  <p class="meta">此介面只綁定這台電腦的 127.0.0.1，不提供網路存取或登入。</p>
+  {% if meetings %}
+    {% for meeting in meetings %}
+      <section class="card">
+        <strong>{{ meeting.created_at[:16] }}</strong>
+        <div class="meta">會議 ID：{{ meeting.id }} ・ Telegram 使用者：{{ meeting.user_id }}</div>
+        <p>{{ meeting.transcript_text[:150] }}{% if meeting.transcript_text|length > 150 %}…{% endif %}</p>
+        <a href="{{ url_for('edit_meeting', meeting_id=meeting.id) }}">開啟校稿</a>
+      </section>
+    {% endfor %}
+  {% else %}
+    <section class="card">尚無會議資料。先在 Telegram 上傳一段語音或音檔。</section>
+  {% endif %}
+{% endblock %}

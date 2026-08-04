@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}本機逐字稿校稿{% endblock %}</title>
+    <style>
+      body { margin: 0; background: #f5f7fb; color: #1f2937; font-family: "Microsoft JhengHei", system-ui, sans-serif; }
+      main { max-width: 960px; margin: 0 auto; padding: 32px 20px 56px; }
+      a { color: #1d4ed8; } .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; margin: 12px 0; }
+      .meta { color: #6b7280; font-size: .9rem; } .notice { background: #dcfce7; color: #166534; padding: 12px; border-radius: 8px; }
+      .error { background: #fee2e2; color: #991b1b; padding: 12px; border-radius: 8px; }
+      textarea { width: 100%; min-height: 420px; box-sizing: border-box; padding: 14px; font: 16px/1.65 "Microsoft JhengHei", system-ui, sans-serif; border: 1px solid #cbd5e1; border-radius: 8px; }
+      button { background: #1d4ed8; color: white; border: 0; padding: 11px 18px; border-radius: 8px; font: inherit; cursor: pointer; }
+      button:hover { background: #1e40af; }
+      .segment { display: block; width: 100%; text-align: left; color: #1f2937; background: #fff; border: 1px solid #e5e7eb; margin: 8px 0; }
+      .segment:hover { background: #eff6ff; color: #1f2937; }
+    </style>
+  </head>
+  <body><main>{% block content %}{% endblock %}</main></body>
+</html>
