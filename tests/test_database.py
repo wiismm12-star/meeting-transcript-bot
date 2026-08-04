@@ -9,6 +9,7 @@ from transcript_bot.database import (
     create_meeting,
     delete_meeting,
     get_meeting_export,
+    get_meeting_segments,
     get_speaker_aliases,
     init_database,
     save_transcript_segments,
@@ -54,6 +55,11 @@ class DeleteMeetingTests(unittest.TestCase):
         self.assertFalse(delete_meeting(self.data_dir, self.meeting_id, 2002))
         self.assertIsNotNone(get_meeting_export(self.data_dir, self.meeting_id, 1001))
         self.assertEqual(get_speaker_aliases(self.data_dir, self.meeting_id, 1001), {"Speaker 1": "主持人"})
+
+    def test_get_meeting_segments_respects_meeting_owner(self) -> None:
+        segments = get_meeting_segments(self.data_dir, self.meeting_id, 1001)
+        self.assertEqual([(segment.speaker, segment.text) for segment in segments], [("Speaker 1", "測試內容")])
+        self.assertEqual(get_meeting_segments(self.data_dir, self.meeting_id, 2002), [])
 
 
 if __name__ == "__main__":

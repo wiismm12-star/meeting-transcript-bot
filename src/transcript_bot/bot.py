@@ -28,6 +28,7 @@ from transcript_bot.database import (
     delete_meeting,
     get_latest_meeting_id,
     get_meeting_export,
+    get_meeting_segments,
     get_meeting_speaker_samples,
     get_speaker_aliases,
     save_transcript_segments,
@@ -46,6 +47,7 @@ from transcript_bot.formatting import (
     polish_local_transcript,
     polish_transcript,
     render_plain_transcript,
+    render_raw_transcript,
 )
 from transcript_bot.storage import create_job_paths
 from transcript_bot.transcription import transcribe_with_diarization
@@ -70,6 +72,7 @@ class PendingEmail:
 
 PENDING_EXPORTS: dict[int, PendingExport] = {}
 PENDING_EMAILS: dict[int, PendingEmail] = {}
+OUTPUT_MODES: dict[int, str] = {}
 
 
 def build_application(token: str) -> Application:
@@ -77,6 +80,7 @@ def build_application(token: str) -> Application:
     app.add_handler(CallbackQueryHandler(handle_export_choice, pattern=r"^export:"))
     app.add_handler(CallbackQueryHandler(handle_speaker_name_action, pattern=r"^speaker:"))
     app.add_handler(CommandHandler("latest", handle_latest_command))
+    app.add_handler(CommandHandler("mode", handle_mode_command))
     app.add_handler(CommandHandler("delete", handle_delete_command))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO | filters.Document.AUDIO, handle_audio))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
@@ -100,11 +104,7 @@ async def handle_latest_command(update: Update, context: ContextTypes.DEFAULT_TY
 
     aliases = get_speaker_aliases(settings.data_dir, meeting_id, user_id)
     alias_text = _speaker_alias_summary(aliases)
-    preview_text = (
-        _preview_text(meeting.transcript_text)
-        if meeting.transcript_text.strip()
-        else "這筆會議目前沒有逐字稿內容。"
-    )
+    preview_text = _preview_text(_transcript_for_mode(meeting, user_id))
     await update.message.reply_text(
         f"最近一次會議 ID：{meeting_id}\n\n"
         f"{preview_text}\n\n"
@@ -112,6 +112,22 @@ async def handle_latest_command(update: Update, context: ContextTypes.DEFAULT_TY
         "你也可以重新選擇要輸出的檔案：",
         reply_markup=_export_keyboard(meeting_id),
     )
+
+
+async def handle_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.message:
+        return
+
+    if len(context.args) != 1 or context.args[0].lower() not in {"raw", "cleaned"}:
+        await update.message.reply_text(
+            "用法：`/mode raw` 顯示未潤稿逐字稿，或 `/mode cleaned` 顯示清理版逐字稿。"
+        )
+        return
+
+    mode = context.args[0].lower()
+    OUTPUT_MODES[update.effective_user.id] = mode
+    label = "原始逐字稿" if mode == "raw" else "清理版逐字稿"
+    await update.message.reply_text(f"已切換為「{label}」模式，之後的預覽與匯出都會使用此模式。")
 
 
 async def handle_delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -235,9 +251,14 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         polished_text = polish_transcript(raw_text) if settings.enable_polish else polish_local_transcript(raw_text)
         polished_text = polish_local_transcript(polished_text)
         update_meeting_transcript_text(settings.data_dir, paths.job_id, polished_text)
+        displayed_text = (
+            render_raw_transcript(normalized_segments)
+            if _output_mode(user.id) == "raw"
+            else polished_text
+        )
 
         await message.reply_text(
-            f"會議 ID：{paths.job_id}\n\n{_preview_text(polished_text)}\n\n請選擇要輸出的檔案：",
+            f"會議 ID：{paths.job_id}\n\n{_preview_text(displayed_text)}\n\n請選擇要輸出的檔案：",
             reply_markup=_export_keyboard(paths.job_id),
         )
     except AudioProcessingError as exc:
@@ -288,7 +309,7 @@ async def handle_export_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.message.reply_text("找不到這筆會議，或你沒有權限輸出此會議。")
         return
 
-    if not meeting.transcript_text.strip():
+    if not _transcript_for_mode(meeting, user.id).strip():
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text("這筆會議目前沒有可輸出的逐字稿內容。")
         return
@@ -490,6 +511,16 @@ def _email_attachments(meeting, export_type: str) -> list[Path]:
     return attachments
 
 
+def _output_mode(user_id: int) -> str:
+    return OUTPUT_MODES.get(user_id, "cleaned")
+
+
+def _transcript_for_mode(meeting, user_id: int) -> str:
+    if _output_mode(user_id) == "raw":
+        return render_raw_transcript(get_meeting_segments(settings.data_dir, meeting.id, user_id))
+    return meeting.transcript_text
+
+
 async def _export_meeting_documents(message, context: ContextTypes.DEFAULT_TYPE, meeting_id: str, export_type: str, user_id: int) -> None:
     meeting = get_meeting_export(settings.data_dir, meeting_id, user_id)
     if not meeting:
@@ -497,7 +528,9 @@ async def _export_meeting_documents(message, context: ContextTypes.DEFAULT_TYPE,
         return
 
     aliases = get_speaker_aliases(settings.data_dir, meeting_id, user_id)
-    transcript_text = polish_local_transcript(apply_speaker_aliases(meeting.transcript_text, aliases))
+    transcript_text = apply_speaker_aliases(_transcript_for_mode(meeting, user_id), aliases)
+    if _output_mode(user_id) == "cleaned":
+        transcript_text = polish_local_transcript(transcript_text)
     transcript_txt = Path(meeting.transcript_txt_path)
     transcript_docx = Path(meeting.transcript_docx_path)
 

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from transcript_bot.formatting import clean_text
+from transcript_bot.formatting import clean_text, render_raw_transcript
+from transcript_bot.transcription import TranscriptSegment
 
 
 class FormattingTests(unittest.TestCase):
@@ -11,6 +12,10 @@ class FormattingTests(unittest.TestCase):
 
     def test_corrects_confirmed_escalator_recognition_error(self) -> None:
         self.assertEqual(clean_text("請搭乘首扶梯上樓"), "請搭乘手扶梯上樓")
+
+    def test_raw_rendering_preserves_unpolished_turn_text(self) -> None:
+        result = render_raw_transcript([TranscriptSegment("Speaker 1", 0, 1, "的歌手  t 你")])
+        self.assertEqual(result, "Speaker 1：的歌手  t 你")
 
 
 if __name__ == "__main__":

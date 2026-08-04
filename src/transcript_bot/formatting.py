@@ -73,6 +73,15 @@ def render_plain_transcript(segments: list[TranscriptSegment]) -> str:
     return polish_local_transcript("\n\n".join(lines))
 
 
+def render_raw_transcript(segments: list[TranscriptSegment]) -> str:
+    """Render stored speaker turns without LLM polishing or fragment trimming."""
+    return "\n\n".join(
+        f"{segment.speaker}：{segment.text.strip()}"
+        for segment in segments
+        if segment.text.strip()
+    )
+
+
 def polish_local_transcript(text: str) -> str:
     text = to_traditional(text)
     polished_lines: list[str] = []

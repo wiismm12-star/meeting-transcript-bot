@@ -199,6 +199,30 @@ def get_meeting_speaker_labels(data_dir: Path, meeting_id: str) -> list[str]:
     return [str(row["speaker_label"]) for row in rows]
 
 
+def get_meeting_segments(data_dir: Path, meeting_id: str, user_id: int) -> list[TranscriptSegment]:
+    with _connect(data_dir) as conn:
+        rows = conn.execute(
+            """
+            SELECT s.speaker_label, s.start_time, s.end_time, s.text
+            FROM transcript_segments AS s
+            JOIN meetings AS m ON m.id = s.meeting_id
+            WHERE s.meeting_id = ? AND m.user_id = ?
+            ORDER BY s.sequence
+            """,
+            (meeting_id, user_id),
+        ).fetchall()
+
+    return [
+        TranscriptSegment(
+            speaker=str(row["speaker_label"]),
+            start=float(row["start_time"] or 0),
+            end=float(row["end_time"] or 0),
+            text=str(row["text"]),
+        )
+        for row in rows
+    ]
+
+
 def get_meeting_speaker_samples(data_dir: Path, meeting_id: str) -> list[SpeakerSample]:
     with _connect(data_dir) as conn:
         rows = conn.execute(
