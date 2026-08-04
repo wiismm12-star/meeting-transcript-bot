@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meeting-transcript-bot"
+version = "0.1.0"
+description = "Telegram bot MVP for meeting transcription with speaker diarization."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28.0",
+    "openai>=1.99.0",
+    "opencc-python-reimplemented>=0.1.7",
+    "pydantic-settings>=2.4.0",
+    "python-docx>=1.1.2",
+    "python-dotenv>=1.0.1",
+    "python-telegram-bot>=21.6",
+]
+
+[project.scripts]
+transcript-bot = "transcript_bot.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

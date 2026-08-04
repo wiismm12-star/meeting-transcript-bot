@@ -1,0 +1,1 @@
+"""Meeting transcription bot package."""
