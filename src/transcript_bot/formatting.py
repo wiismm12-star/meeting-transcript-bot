@@ -20,6 +20,7 @@ _CJK_TOKEN_SPACE_PATTERN = re.compile(r"(?<=[\u4e00-\u9fff0-9])\s+(?=[\u4e00-\u9
 _CONFIRMED_ASR_CORRECTIONS = {
     "首扶梯": "手扶梯",
 }
+_ACTION_KEYWORDS = ("決定", "決議", "確認", "同意", "負責", "完成", "安排", "提交", "回覆", "跟進", "下一步")
 
 
 def normalize_speaker_labels(segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
@@ -90,6 +91,32 @@ def render_meeting_minutes(cleaned_transcript: str) -> str:
 
     bullets = "\n".join(f"- {line}" for line in entries)
     return f"# 會議紀錄\n\n## 發言摘要\n{bullets}"
+
+
+def render_action_summary(cleaned_transcript: str) -> str:
+    """Extract only explicit decision or action language; never infer a new conclusion."""
+    items: list[str] = []
+    seen: set[str] = set()
+
+    for line in cleaned_transcript.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        match = re.match(r"^(.+?)[：:]\s*(.+)$", line)
+        if not match:
+            continue
+        speaker, content = match.groups()
+        for sentence in re.split(r"(?<=[。！？；])", content):
+            sentence = sentence.strip()
+            if sentence and any(keyword in sentence for keyword in _ACTION_KEYWORDS):
+                item = f"{speaker}：{sentence}"
+                if item not in seen:
+                    seen.add(item)
+                    items.append(item)
+
+    if not items:
+        return "# 決議事項摘要\n\n未偵測到原文中明確的決議或行動事項。"
+    return "# 決議事項摘要\n\n## 原文明確提及的事項\n" + "\n".join(f"- {item}" for item in items)
 
 
 def polish_local_transcript(text: str) -> str:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from transcript_bot.formatting import clean_text, render_meeting_minutes, render_raw_transcript
+from transcript_bot.formatting import clean_text, render_action_summary, render_meeting_minutes, render_raw_transcript
 from transcript_bot.transcription import TranscriptSegment
 
 
@@ -23,6 +23,19 @@ class FormattingTests(unittest.TestCase):
             result,
             "# 會議紀錄\n\n## 發言摘要\n- Speaker 1：確認時程。\n- Speaker 2：下週回覆。",
         )
+
+    def test_action_summary_extracts_only_explicit_action_language(self) -> None:
+        result = render_action_summary(
+            "Speaker 1：今天討論專案。\n\nSpeaker 2：下週確認測試時程。"
+        )
+        self.assertEqual(
+            result,
+            "# 決議事項摘要\n\n## 原文明確提及的事項\n- Speaker 2：下週確認測試時程。",
+        )
+
+    def test_action_summary_does_not_infer_a_decision(self) -> None:
+        result = render_action_summary("Speaker 1：今天討論專案。")
+        self.assertEqual(result, "# 決議事項摘要\n\n未偵測到原文中明確的決議或行動事項。")
 
 
 if __name__ == "__main__":
