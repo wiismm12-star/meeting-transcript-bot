@@ -133,7 +133,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     upsert_speaker_aliases(settings.data_dir, meeting_id, user_id, aliases)
     saved_aliases = get_speaker_aliases(settings.data_dir, meeting_id, user_id)
     rendered = "\n".join(f"{source} -> {target}" for source, target in saved_aliases.items())
-    await update.message.reply_text(f"已記住會議 {meeting_id} 的主講人對應：\n{rendered}")
+    await update.message.reply_text(
+        f"已記住會議 {meeting_id} 的主講人對應：\n"
+        f"{rendered}\n\n"
+        "你可以重新選擇要輸出的檔案：",
+        reply_markup=_export_keyboard(meeting_id),
+    )
 
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

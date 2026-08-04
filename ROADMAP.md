@@ -40,9 +40,9 @@
 - [x] 選擇輸出後先請使用者填寫 Speaker 對應範本，再產生檔案
 - [x] Speaker 對應範本附上每位 Speaker 的代表發言片段
 - [x] 支援 `/latest` 查詢最近一次會議
-- [ ] 支援 `/rename` 修改指定會議的主講人名稱
 - [x] 支援簡化格式 `Speaker 1 = 主持人` 修改最近一次會議
-- [ ] 支援修改 speaker alias 後重新匯出 txt/docx
+- [x] 暫不實作 `/rename`；目前以輸出前 Speaker 範本與最近一次會議簡化格式處理主講人命名
+- [x] 支援修改 speaker alias 後重新匯出 txt/docx
 - [ ] 支援 `/delete <meeting_id>` 刪除會議資料
 - [ ] 錯誤訊息不得洩露 API key、token 或敏感路徑
 - [ ] Telegram 回覆文字統一繁體中文
