@@ -48,6 +48,7 @@ from transcript_bot.formatting import (
     polish_transcript,
     render_plain_transcript,
     render_raw_transcript,
+    render_meeting_minutes,
 )
 from transcript_bot.storage import create_job_paths
 from transcript_bot.transcription import transcribe_with_diarization
@@ -118,15 +119,15 @@ async def handle_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not update.effective_user or not update.message:
         return
 
-    if len(context.args) != 1 or context.args[0].lower() not in {"raw", "cleaned"}:
+    if len(context.args) != 1 or context.args[0].lower() not in {"raw", "cleaned", "minutes"}:
         await update.message.reply_text(
-            "用法：`/mode raw` 顯示未潤稿逐字稿，或 `/mode cleaned` 顯示清理版逐字稿。"
+            "用法：`/mode raw` 原始逐字稿、`/mode cleaned` 清理版，或 `/mode minutes` 會議紀錄。"
         )
         return
 
     mode = context.args[0].lower()
     OUTPUT_MODES[update.effective_user.id] = mode
-    label = "原始逐字稿" if mode == "raw" else "清理版逐字稿"
+    label = {"raw": "原始逐字稿", "cleaned": "清理版逐字稿", "minutes": "會議紀錄"}[mode]
     await update.message.reply_text(f"已切換為「{label}」模式，之後的預覽與匯出都會使用此模式。")
 
 
@@ -254,6 +255,8 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         displayed_text = (
             render_raw_transcript(normalized_segments)
             if _output_mode(user.id) == "raw"
+            else render_meeting_minutes(polished_text)
+            if _output_mode(user.id) == "minutes"
             else polished_text
         )
 
@@ -518,6 +521,8 @@ def _output_mode(user_id: int) -> str:
 def _transcript_for_mode(meeting, user_id: int) -> str:
     if _output_mode(user_id) == "raw":
         return render_raw_transcript(get_meeting_segments(settings.data_dir, meeting.id, user_id))
+    if _output_mode(user_id) == "minutes":
+        return render_meeting_minutes(meeting.transcript_text)
     return meeting.transcript_text
 
 
@@ -542,7 +547,8 @@ async def _export_meeting_documents(message, context: ContextTypes.DEFAULT_TYPE,
             await _reply_document(message, transcript_txt, "文字稿 TXT")
 
         if export_type in {"docx", "both"}:
-            write_docx(transcript_docx, "會議逐字稿", transcript_text)
+            title = "會議紀錄" if _output_mode(user_id) == "minutes" else "會議逐字稿"
+            write_docx(transcript_docx, title, transcript_text)
             await _reply_document(message, transcript_docx, "文字稿 DOCX")
     except Exception:
         logger.exception("Failed to export meeting documents")

@@ -82,6 +82,16 @@ def render_raw_transcript(segments: list[TranscriptSegment]) -> str:
     )
 
 
+def render_meeting_minutes(cleaned_transcript: str) -> str:
+    """Create a conservative minutes view without inferring decisions or action items."""
+    entries = [line.strip() for line in cleaned_transcript.splitlines() if line.strip()]
+    if not entries:
+        return "# 會議紀錄\n\n目前沒有可整理的發言內容。"
+
+    bullets = "\n".join(f"- {line}" for line in entries)
+    return f"# 會議紀錄\n\n## 發言摘要\n{bullets}"
+
+
 def polish_local_transcript(text: str) -> str:
     text = to_traditional(text)
     polished_lines: list[str] = []
