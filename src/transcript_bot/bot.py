@@ -81,6 +81,7 @@ def build_application(token: str) -> Application:
     app = ApplicationBuilder().token(token).build()
     app.add_handler(CallbackQueryHandler(handle_export_choice, pattern=r"^export:"))
     app.add_handler(CallbackQueryHandler(handle_speaker_name_action, pattern=r"^speaker:"))
+    app.add_handler(CallbackQueryHandler(handle_email_action, pattern=r"^email:"))
     app.add_handler(CommandHandler("latest", handle_latest_command))
     app.add_handler(CommandHandler("mode", handle_mode_command))
     app.add_handler(CommandHandler("delete", handle_delete_command))
@@ -368,6 +369,36 @@ async def handle_speaker_name_action(update: Update, context: ContextTypes.DEFAU
         await query.message.reply_text("無法辨識這個按鈕，請直接回覆名稱或重新選擇輸出。")
 
 
+async def handle_email_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    user = update.effective_user
+    if not query or not user or not query.data or not query.message:
+        return
+
+    try:
+        _, action, meeting_id, export_type = query.data.split(":", 3)
+    except ValueError:
+        await query.answer("此按鈕已失效，請重新選擇輸出。", show_alert=True)
+        return
+
+    pending_email = PENDING_EMAILS.get(user.id)
+    if (
+        not pending_email
+        or pending_email.meeting_id != meeting_id
+        or pending_email.export_type != export_type
+    ):
+        await query.answer("此寄送提示已失效。", show_alert=True)
+        return
+
+    await query.answer()
+    await query.edit_message_reply_markup(reply_markup=None)
+    if action == "skip":
+        PENDING_EMAILS.pop(user.id, None)
+        await query.message.reply_text("已略過 Email 寄送。")
+    else:
+        await query.message.reply_text("無法辨識這個按鈕，請重新選擇輸出。")
+
+
 def _extract_audio_meta(update: Update):
     message = update.message
     if not message:
@@ -484,7 +515,7 @@ async def _handle_pending_email(message, pending_email: PendingEmail, text: str,
         await message.reply_text("已略過 Email 寄送。")
         return
     if not is_valid_email(text):
-        await message.reply_text("Email 格式不正確，請直接輸入有效的收件 Email，或回覆「略過」。")
+        await message.reply_text("Email 格式不正確，請直接輸入有效的收件 Email，或按下「略過寄送」。")
         return
 
     meeting = get_meeting_export(settings.data_dir, pending_email.meeting_id, user_id)
@@ -539,6 +570,7 @@ async def _export_meeting_documents(message, context: ContextTypes.DEFAULT_TYPE,
 
     aliases = get_speaker_aliases(settings.data_dir, meeting_id, user_id)
     transcript_text = apply_speaker_aliases(_transcript_for_mode(meeting, user_id), aliases)
+    speaker_names = _meeting_speaker_names(meeting_id, user_id, aliases)
     if _output_mode(user_id) == "cleaned":
         transcript_text = polish_local_transcript(transcript_text)
     transcript_txt = Path(meeting.transcript_txt_path)
@@ -556,7 +588,14 @@ async def _export_meeting_documents(message, context: ContextTypes.DEFAULT_TYPE,
                 "minutes": "會議紀錄",
                 "summary": "決議事項摘要",
             }.get(_output_mode(user_id), "會議逐字稿")
-            write_docx(transcript_docx, title, transcript_text)
+            write_docx(
+                transcript_docx,
+                title,
+                transcript_text,
+                meeting_id=meeting.id,
+                meeting_date=meeting.created_at,
+                speakers=speaker_names,
+            )
             await _reply_document(message, transcript_docx, "文字稿 DOCX")
     except Exception:
         logger.exception("Failed to export meeting documents")
@@ -564,8 +603,14 @@ async def _export_meeting_documents(message, context: ContextTypes.DEFAULT_TYPE,
         return
 
     await message.reply_text(f"會議 {meeting_id} 的檔案已輸出完成。")
+    if not settings.enable_email_delivery:
+        return
+
     PENDING_EMAILS[user_id] = PendingEmail(meeting_id=meeting_id, export_type=export_type)
-    await message.reply_text("若要寄送檔案，請直接回覆收件 Email；不需要請回覆「略過」。")
+    await message.reply_text(
+        "若要寄送檔案，請直接回覆收件 Email；不需要寄送請按下方按鈕。",
+        reply_markup=_email_skip_keyboard(meeting_id, export_type),
+    )
 
 
 def _export_keyboard(meeting_id: str) -> InlineKeyboardMarkup:
@@ -573,13 +618,19 @@ def _export_keyboard(meeting_id: str) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton("輸出 TXT", callback_data=f"export:{meeting_id}:txt"),
-                InlineKeyboardButton("輸出 DOCX", callback_data=f"export:{meeting_id}:docx"),
+                InlineKeyboardButton("輸出 Word 檔（DOCX）", callback_data=f"export:{meeting_id}:docx"),
             ],
             [
-                InlineKeyboardButton("TXT + DOCX", callback_data=f"export:{meeting_id}:both"),
+                InlineKeyboardButton("TXT ＋ Word", callback_data=f"export:{meeting_id}:both"),
                 InlineKeyboardButton("不用輸出檔案", callback_data=f"export:{meeting_id}:none"),
             ],
         ]
+    )
+
+
+def _email_skip_keyboard(meeting_id: str, export_type: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("略過寄送", callback_data=f"email:skip:{meeting_id}:{export_type}")]]
     )
 
 
@@ -588,6 +639,15 @@ def _speaker_alias_summary(aliases: dict[str, str]) -> str:
         return "目前尚未設定主講人名稱。"
     rendered = "\n".join(f"{source} -> {target}" for source, target in aliases.items())
     return f"目前主講人對應：\n{rendered}"
+
+
+def _meeting_speaker_names(meeting_id: str, user_id: int, aliases: dict[str, str]) -> list[str]:
+    names: list[str] = []
+    for segment in get_meeting_segments(settings.data_dir, meeting_id, user_id):
+        name = aliases.get(segment.speaker, segment.speaker)
+        if name not in names:
+            names.append(name)
+    return names
 
 
 def _sample_text(text: str, max_chars: int = 48) -> str:

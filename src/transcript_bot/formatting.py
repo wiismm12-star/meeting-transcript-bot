@@ -143,11 +143,14 @@ def clean_text(text: str) -> str:
     text = to_traditional(text)
     for source, replacement in _CONFIRMED_ASR_CORRECTIONS.items():
         text = text.replace(source, replacement)
-    text = re.sub(r"^(Speaker\s+\d+)\s*[，:：]", r"\1：", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(Speaker\s+\d+)(?:\s*[，:：])+", r"\1：", text, flags=re.IGNORECASE)
     text = _CJK_TOKEN_SPACE_PATTERN.sub("", text)
     text = text.replace("\u3000", " ")
     text = re.sub(r"\s+", " ", text)
     text = _FILLER_PATTERN.sub("", text)
+    # Removing a leading filler can expose a comma after a speaker label.
+    # Normalize once more so "Speaker 1: 呃，內容" becomes "Speaker 1：內容".
+    text = re.sub(r"^(Speaker\s+\d+)(?:\s*[，:：])+", r"\1：", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*([，。！？、；：])\s*", r"\1", text)
     text = re.sub(r"([，。！？、；：]){2,}", r"\1", text)
     text = re.sub(r"\b(\w+)(?:\s+\1\b)+", r"\1", text, flags=re.IGNORECASE)

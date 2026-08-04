@@ -121,7 +121,7 @@ OPENAI_TEXT_MODEL=gpt-4.1-mini
 
 ## 寄送至指定 Email（可選）
 
-設定 SMTP 後，使用者每次輸出 TXT 或 DOCX 後，可直接在 Telegram 回覆不同的收件 Email；回覆「略過」則不寄送。寄件帳號只設定在伺服器的 `.env`：
+設定 SMTP 後，使用者每次輸出 TXT 或 DOCX 後，可直接在 Telegram 輸入不同的收件 Email，或按下略過寄送按鈕。寄件帳號只設定在伺服器的 `.env`。寄送功能預設關閉，完成 SMTP 設定並驗證後才設為 `true`：
 
 ```env
 SMTP_HOST=smtp.example.com
@@ -130,6 +130,7 @@ SMTP_USERNAME=你的寄件帳號
 SMTP_PASSWORD=你的SMTP應用程式密碼
 SMTP_FROM=你的寄件帳號
 SMTP_USE_TLS=true
+ENABLE_EMAIL_DELIVERY=false
 ```
 
 請使用服務商提供的 SMTP 應用程式密碼，不要使用一般登入密碼。

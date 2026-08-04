@@ -24,6 +24,7 @@ class MeetingRecord:
 class MeetingExportRecord:
     id: str
     user_id: int
+    created_at: str
     transcript_text: str
     transcript_txt_path: str
     transcript_docx_path: str
@@ -163,6 +164,7 @@ def get_meeting_export(data_dir: Path, meeting_id: str, user_id: int) -> Meeting
             SELECT
                 id,
                 user_id,
+                created_at,
                 transcript_text,
                 transcript_txt_path,
                 transcript_docx_path
@@ -178,6 +180,7 @@ def get_meeting_export(data_dir: Path, meeting_id: str, user_id: int) -> Meeting
     return MeetingExportRecord(
         id=str(row["id"]),
         user_id=int(row["user_id"]),
+        created_at=str(row["created_at"]),
         transcript_text=str(row["transcript_text"]),
         transcript_txt_path=str(row["transcript_txt_path"]),
         transcript_docx_path=str(row["transcript_docx_path"]),

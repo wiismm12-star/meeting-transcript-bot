@@ -69,18 +69,18 @@
 - [x] 支援 `/mode minutes`
 - [x] 支援 `/mode summary`
 - [x] 匯出檔名包含日期與 meeting id
-- [ ] Word 檔加入標題、日期、主講人列表與段落樣式
+- [x] Word 檔加入標題、日期、主講人列表與段落樣式
 
 ### 第四批：測試與品質
 
-- [ ] 測試簡體轉繁體
-- [ ] 測試本地潤稿清理
-- [ ] 測試 speaker label 正規化
-- [ ] 測試 speaker alias 套用
+- [x] 測試簡體轉繁體
+- [x] 測試本地潤稿清理
+- [x] 測試 speaker label 正規化
+- [x] 測試 speaker alias 套用
 - [ ] 測試 Deepgram utterances parser
 - [ ] 測試 Deepgram words fallback parser
 - [ ] 測試 txt 匯出
-- [ ] 測試 docx 匯出
+- [x] 測試 docx 匯出
 - [ ] 測試缺少環境變數時的錯誤提示
 - [ ] 加入 GitHub Actions 跑基本測試
 

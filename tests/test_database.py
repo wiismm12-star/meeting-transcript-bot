@@ -61,6 +61,12 @@ class DeleteMeetingTests(unittest.TestCase):
         self.assertEqual([(segment.speaker, segment.text) for segment in segments], [("Speaker 1", "測試內容")])
         self.assertEqual(get_meeting_segments(self.data_dir, self.meeting_id, 2002), [])
 
+    def test_export_record_includes_creation_time(self) -> None:
+        meeting = get_meeting_export(self.data_dir, self.meeting_id, 1001)
+        self.assertIsNotNone(meeting)
+        assert meeting is not None
+        self.assertRegex(meeting.created_at, r"^\d{4}-\d{2}-\d{2}")
+
 
 if __name__ == "__main__":
     unittest.main()
