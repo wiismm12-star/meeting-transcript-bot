@@ -6,10 +6,16 @@ from pathlib import Path
 
 from docx import Document
 
-from transcript_bot.exporters import write_docx
+from transcript_bot.exporters import write_docx, write_text
 
 
 class DocxExporterTests(unittest.TestCase):
+    def test_text_export_writes_utf8_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "meeting.txt"
+            write_text(path, "主持人：測試文字稿")
+            self.assertEqual(path.read_text(encoding="utf-8"), "主持人：測試文字稿")
+
     def test_docx_includes_meeting_metadata_speakers_and_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "meeting.docx"

@@ -77,25 +77,25 @@
 - [x] 測試本地潤稿清理
 - [x] 測試 speaker label 正規化
 - [x] 測試 speaker alias 套用
-- [ ] 測試 Deepgram utterances parser
-- [ ] 測試 Deepgram words fallback parser
-- [ ] 測試 txt 匯出
+- [x] 測試 Deepgram utterances parser
+- [x] 測試 Deepgram words fallback parser
+- [x] 測試 txt 匯出
 - [x] 測試 docx 匯出
-- [ ] 測試缺少環境變數時的錯誤提示
-- [ ] 加入 GitHub Actions 跑基本測試
+- [x] 測試缺少環境變數時的錯誤提示
+- [x] 加入 GitHub Actions 跑基本測試
 
 ### 第五批：開源文件
 
-- [ ] 清理 README 亂碼與內容結構
-- [ ] README 說明本機安裝流程
-- [ ] README 說明 Telegram Bot token 取得方式
-- [ ] README 說明 Deepgram API key 取得方式
-- [ ] README 說明 OpenAI optional polish 設定
-- [ ] README 說明資料保存位置與刪除方式
-- [ ] README 說明開源版不提供共用 API key
-- [ ] 加入 `LICENSE`
-- [ ] 加入 `CONTRIBUTING.md`
-- [ ] 加入 `SECURITY.md`
+- [x] 清理 README 亂碼與內容結構
+- [x] README 說明本機安裝流程
+- [x] README 說明 Telegram Bot token 取得方式
+- [x] README 說明 Deepgram API key 取得方式
+- [x] README 說明 OpenAI optional polish 設定
+- [x] README 說明資料保存位置與刪除方式
+- [x] README 說明開源版不提供共用 API key
+- [x] 加入 `LICENSE`（MIT）
+- [x] 加入 `CONTRIBUTING.md`
+- [x] 加入 `SECURITY.md`
 - [ ] 加入 demo transcript 時只使用假資料
 
 ### 第六批：產品化功能

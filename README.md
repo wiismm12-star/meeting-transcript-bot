@@ -1,47 +1,47 @@
-# 會議語音逐字稿 Bot MVP
+# 會議語音逐字稿 Bot
 
-這是一個 Telegram Bot MVP。使用者可以直接用手機在 Telegram 傳語音訊息或音檔，後端會下載音訊、轉檔、做語音逐字稿與主講人分離，最後回傳文字稿與 Word 檔。
+以 Telegram 為入口的繁體中文會議逐字稿工具。使用者在手機傳送語音或音檔後，Bot 會自動轉錄、區分不同聲音、提供主講人命名，並輸出 TXT 或 Word（DOCX）。
 
-## 功能範圍
+## 功能
 
-- 接收 Telegram 語音訊息、音檔、一般音訊文件
-- 使用 ffmpeg 將音訊轉為單聲道 mp3
-- 預設使用 Deepgram Nova-3 產生含主講人標籤的逐字稿
-- 將 `SPEAKER_0` 這類標籤整理成可讀的 `Speaker 1`
-- 產生原始逐字稿 `.txt`
-- 產生逐字稿 `.docx`
-- 支援使用者回覆 `Speaker 1 = 王經理` 來替換主講人名稱
-- 預設以本機 Ollama 免費潤稿，將逐字稿整理成正式繁體中文
-- 也可選擇 OpenAI 作為雲端潤稿供應商
+- 支援 Telegram 語音、音檔與音訊文件。
+- 預設使用 Deepgram Nova-3 進行中文轉錄。
+- 支援 Deepgram 與可選的本機 pyannote.audio 多人語者分離；不需要在錄音中先自我介紹。
+- 將來源標籤正規化為 `Speaker 1`、`Speaker 2`，並可在每場會議個別命名。
+- 提供原始逐字稿、清理版、會議紀錄、決議事項摘要四種輸出模式。
+- 預設使用本機 Ollama 潤稿，將內容轉為繁體中文並保守清理雜訊。
+- 輸出 UTF-8 TXT 與含標題、日期、主講人清單的 Word 檔。
+- 使用 SQLite 保存每個使用者、每場會議的逐字稿與主講人別名。
 
 ## 系統需求
 
 - Python 3.11+
-- ffmpeg
+- [ffmpeg](https://ffmpeg.org/)（需可在 PowerShell 執行 `ffmpeg -version`）
 - Telegram Bot Token
 - Deepgram API Key
-- Ollama（預設本機免費潤稿；建議模型：Qwen3 8B）
-- OpenAI API Key，可選，只有使用 OpenAI 潤稿或 OpenAI 轉錄時需要
-- SMTP 寄件帳號，可選，只有要寄送 Email 附件時需要
+- Ollama 與 `qwen3:8b`（預設本機潤稿；可選但建議安裝）
 
-## 安裝
+OpenAI、pyannote.audio 與 SMTP 都是選用功能。
+
+## 本機安裝
 
 ```powershell
+git clone https://github.com/wiismm12-star/meeting-transcript-bot.git
+cd meeting-transcript-bot
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -e .
+python -m pip install --upgrade pip
+python -m pip install -e .
 Copy-Item .env.example .env
 ```
 
-如果你在這台電腦使用 Python launcher，也可以直接：
+若 PowerShell 阻止啟用虛擬環境，仍可直接使用 ` .\.venv\Scripts\python.exe ` 執行下列所有指令。
 
-```powershell
-py -3 -m pip install -e .
-```
+## 設定 Bot 與 Deepgram
 
-## 環境變數
-
-編輯 `.env`：
+1. 在 Telegram 向 [@BotFather](https://t.me/BotFather) 建立 Bot，取得 Token。
+2. 在 [Deepgram Console](https://console.deepgram.com/) 建立 API Key。
+3. 編輯 `.env`，至少填入以下欄位：
 
 ```env
 TELEGRAM_BOT_TOKEN=你的_telegram_bot_token
@@ -53,64 +53,21 @@ OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_TEXT_MODEL=qwen3:8b
 DATA_DIR=./data
 MAX_AUDIO_MB=50
-ENABLE_PYANNOTE_DIARIZATION=false
-PYANNOTE_HF_TOKEN=
-PYANNOTE_NUM_SPEAKERS=0
 ```
 
-## 本機多人語者分離（pyannote.audio，可選）
+請勿提交 `.env`、API Key、Token、音檔或 `data/` 資料夾。
 
-啟用後由 pyannote.audio 依聲音特徵分群，再以 Deepgram 產生的中文詞級時間戳套用 Speaker 標籤。這不需要主講人在錄音中自我介紹；系統只會產生通用的 `Speaker 1`、`Speaker 2` 等標籤。
+## 本機免費潤稿（預設）
 
-1. 建立 Hugging Face 帳號，並接受 [`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1) 的使用條款。
-2. 建立具有讀取權限的 Hugging Face Token。
-3. 使用 Python 3.11+ 建立虛擬環境並安裝選用套件：
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[pyannote]"
-```
-
-4. 在 `.env` 設定：
-
-```env
-TRANSCRIBE_PROVIDER=deepgram
-ENABLE_PYANNOTE_DIARIZATION=true
-PYANNOTE_HF_TOKEN=你的_Hugging_Face_Token
-PYANNOTE_NUM_SPEAKERS=4
-```
-
-`PYANNOTE_NUM_SPEAKERS=0` 代表讓模型自行估計人數；已確定是四人會議時可設為 `4`。啟用後請以虛擬環境啟動 Bot：
-
-```powershell
-.\.venv\Scripts\python.exe -m transcript_bot.main
-```
-
-如果之後要改回 OpenAI 轉錄：
-
-```env
-TRANSCRIBE_PROVIDER=openai
-OPENAI_API_KEY=你的_openai_api_key
-OPENAI_TRANSCRIBE_MODEL=gpt-4o-transcribe-diarize
-```
-
-## 本機免費潤稿（Ollama，預設）
-
-安裝 Ollama 後，下載一次模型即可離線使用；逐字稿不會傳送到雲端：
+安裝 [Ollama](https://ollama.com/) 後執行：
 
 ```powershell
 ollama pull qwen3:8b
 ```
 
-`.env` 使用以下設定：
+逐字稿會在本機整理，不會因潤稿而傳送給雲端模型。若不需要潤稿，可將 `ENABLE_POLISH=false`。
 
-```env
-ENABLE_POLISH=true
-POLISH_PROVIDER=ollama
-OLLAMA_TEXT_MODEL=qwen3:8b
-```
-
-## 改用 OpenAI 潤稿（可選、依 API 用量計費）
+### OpenAI 潤稿（選用、依用量計費）
 
 ```env
 ENABLE_POLISH=true
@@ -119,9 +76,60 @@ OPENAI_API_KEY=你的_openai_api_key
 OPENAI_TEXT_MODEL=gpt-4.1-mini
 ```
 
-## 寄送至指定 Email（可選）
+也可改用 OpenAI 轉錄：
 
-設定 SMTP 後，使用者每次輸出 TXT 或 DOCX 後，可直接在 Telegram 輸入不同的收件 Email，或按下略過寄送按鈕。寄件帳號只設定在伺服器的 `.env`。寄送功能預設關閉，完成 SMTP 設定並驗證後才設為 `true`：
+```env
+TRANSCRIBE_PROVIDER=openai
+OPENAI_API_KEY=你的_openai_api_key
+OPENAI_TRANSCRIBE_MODEL=gpt-4o-transcribe-diarize
+```
+
+## 多人語者分離（pyannote.audio，選用）
+
+pyannote.audio 會依聲音特徵做分群，不需要主講人在錄音裡報名字。它只產生通用標籤，真實名稱仍由會議使用者自行填寫。
+
+1. 建立 Hugging Face 帳號，並接受 [`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1) 的使用條款。
+2. 建立具有讀取權限的 Hugging Face Token。
+3. 安裝選用依賴並設定 `.env`：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[pyannote]"
+```
+
+```env
+TRANSCRIBE_PROVIDER=deepgram
+ENABLE_PYANNOTE_DIARIZATION=true
+PYANNOTE_HF_TOKEN=你的_Hugging_Face_Token
+PYANNOTE_NUM_SPEAKERS=0
+```
+
+`PYANNOTE_NUM_SPEAKERS=0` 代表自動估計人數；已知是四人會議時，可設為 `4`。
+
+## 啟動與使用
+
+```powershell
+.\.venv\Scripts\python.exe -m transcript_bot.main
+```
+
+1. 在 Telegram 對 Bot 傳送語音或音檔。
+2. 完成後選擇「輸出 TXT」、「輸出 Word 檔（DOCX）」或兩者。
+3. Bot 會逐一顯示每位 Speaker 的代表片段；直接回覆名稱，或按「跳過此人」。
+4. Word 檔會帶入會議日期、會議 ID、主講人清單及格式化段落。
+
+可使用以下命令：
+
+```text
+/latest                 查看最近一次會議並重新輸出
+/mode raw               原始逐字稿
+/mode cleaned           清理版逐字稿
+/mode minutes           保守會議紀錄
+/mode summary           僅擷取原文明確的決議或行動
+/delete <meeting_id>    刪除自己的會議與相關本機檔案
+```
+
+## Email 寄送（目前預設關閉）
+
+SMTP 寄送程式已保留，但避免尚未完成設定時干擾使用流程，目前預設關閉。完成 SMTP 設定與測試後，在 `.env` 設為：
 
 ```env
 SMTP_HOST=smtp.example.com
@@ -130,92 +138,33 @@ SMTP_USERNAME=你的寄件帳號
 SMTP_PASSWORD=你的SMTP應用程式密碼
 SMTP_FROM=你的寄件帳號
 SMTP_USE_TLS=true
-ENABLE_EMAIL_DELIVERY=false
+ENABLE_EMAIL_DELIVERY=true
 ```
 
-請使用服務商提供的 SMTP 應用程式密碼，不要使用一般登入密碼。
+請使用服務商建立的 SMTP 應用程式密碼，不要填一般登入密碼。
 
-如果要把 Deepgram 產生的逐字稿再交給 OpenAI 整理成正式稿，設定如下：
+## 資料保存與刪除
 
-```env
-ENABLE_POLISH=true
-POLISH_PROVIDER=openai
-OPENAI_API_KEY=你的_openai_api_key
-OPENAI_TEXT_MODEL=gpt-4.1-mini
-```
+- 資料庫、下載音檔與匯出檔均位於 `DATA_DIR`（預設 `./data`）。
+- 每場會議以唯一 meeting ID 隔離，主講人別名也依 Telegram 使用者與會議分開保存。
+- 使用 `/delete <meeting_id>` 可刪除自己的會議資料與其工作目錄。
+- 刪除後無法復原，請先確認需要的檔案已下載。
 
-確認 ffmpeg 可執行：
+## 測試
 
 ```powershell
-ffmpeg -version
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-## 啟動
+GitHub Actions 會在每次 push 與 pull request 自動執行同一套測試。
 
-```powershell
-py -3 -m transcript_bot.main
-```
+## 限制與安全提醒
 
-如果 `transcript-bot` 指令可用，也可以：
+- 多人同時說話、遠距收音、回音或雜訊，均可能降低分群與轉錄品質。
+- Speaker 標籤代表不同聲音群組，不代表系統識別了真實身份。
+- 開源版不提供共用的 Telegram、Deepgram、OpenAI 或 Hugging Face API Key；請使用者自行建立與保管。
+- 請勿將機密會議資料上傳到未經組織核准的雲端服務。
 
-```powershell
-transcript-bot
-```
+## 授權、貢獻與安全通報
 
-啟動後不要關掉 PowerShell 視窗，回 Telegram 傳語音給你的 Bot 測試。
-
-## 使用方式
-
-1. 在 Telegram 找到你的 Bot
-2. 傳一段語音訊息或音檔
-3. Bot 會回覆處理狀態
-4. 完成後會回傳 `.txt` 和 `.docx`
-5. 如果要替換主講人名稱，可以傳：
-
-```text
-Speaker 1 = 王經理
-Speaker 2 = 陳工程師
-```
-
-## 目前限制
-
-- 第一版使用 Bot polling，正式部署可改成 webhook
-- 主講人真名需由使用者手動指定
-- 多人同時說話、遠距收音、回音大的會議室會影響語者分離準確度
-- 長音檔建議先切段或使用雲端任務佇列處理
-
-## MVP 進度清單
-
-- [x] 建立 Telegram Bot 專案骨架
-- [x] 支援 Telegram polling，本機啟動即可收訊息
-- [x] 接收手機語音訊息、音檔與音訊文件
-- [x] 下載 Telegram 音檔到本機工作目錄
-- [x] 使用 ffmpeg 轉成單聲道 mp3
-- [x] 串接 Deepgram Speech-to-Text
-- [x] 啟用 Deepgram speaker diarization 主講人分離
-- [x] 將主講人整理成 `Speaker 1`、`Speaker 2`
-- [x] 支援 `Speaker 1 = 王經理` 這類主講人名稱對應
-- [x] 產出 `.txt` 文字稿
-- [x] 產出 `.docx` Word 文字稿
-- [x] 回傳文字預覽與附件到 Telegram
-- [x] 將逐字稿統一轉為繁體中文
-- [x] 加入本地潤稿清理：移除多餘空白、重複標點與明顯語助詞
-- [x] 保留 OpenAI 潤飾為可選功能，預設關閉
-- [ ] 加入 LINE Bot 入口
-- [ ] 建立 Web 校稿介面
-- [ ] 支援逐字稿段落手動編輯
-- [ ] 支援主講人名稱持久化儲存
-- [ ] 支援會議稿模板，例如逐字稿、會議紀錄、決議事項摘要
-- [ ] 加入長音檔切段與背景任務佇列
-- [ ] 加入雲端檔案儲存，例如 S3 或 Cloudflare R2
-- [ ] 改成 webhook / 雲端部署
-- [ ] 加入使用者、權限與用量紀錄
-- [ ] 加入成本估算與錯誤重試機制
-
-## 下一步建議
-
-- 加入 LINE Bot 入口
-- 加入 Web 校稿介面
-- 加入會議稿模板管理
-- 加入 S3 / Cloudflare R2 儲存
-- 加入工作佇列，例如 Celery、RQ 或 BullMQ
+本專案採用 [MIT License](LICENSE)。請參閱 [CONTRIBUTING.md](CONTRIBUTING.md) 與 [SECURITY.md](SECURITY.md)。
