@@ -36,6 +36,8 @@ from transcript_bot.database import (
     upsert_speaker_aliases,
 )
 from transcript_bot.deepgram import DeepgramError
+from transcript_bot.gladia import GladiaError
+from transcript_bot.whisper_local import LocalWhisperError
 from transcript_bot.pyannote_diarization import PyannoteDiarizationError
 from transcript_bot.ollama_client import OllamaError
 from transcript_bot.mailer import EmailDeliveryError, is_valid_email, send_transcript_email
@@ -271,6 +273,10 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except AudioProcessingError as exc:
         await message.reply_text(str(exc))
     except DeepgramError as exc:
+        await message.reply_text(str(exc))
+    except GladiaError as exc:
+        await message.reply_text(str(exc))
+    except LocalWhisperError as exc:
         await message.reply_text(str(exc))
     except PyannoteDiarizationError as exc:
         await message.reply_text(str(exc))

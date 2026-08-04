@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import OrderedDict
+from dataclasses import dataclass
 
 from openai import OpenAI
 from opencc import OpenCC
@@ -21,6 +22,13 @@ _CONFIRMED_ASR_CORRECTIONS = {
     "首扶梯": "手扶梯",
 }
 _ACTION_KEYWORDS = ("決定", "決議", "確認", "同意", "負責", "完成", "安排", "提交", "回覆", "跟進", "下一步")
+
+
+@dataclass(frozen=True)
+class MeetingSummary:
+    title: str
+    overview: str
+    highlights: list[str]
 
 
 def normalize_speaker_labels(segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
@@ -91,6 +99,34 @@ def render_meeting_minutes(cleaned_transcript: str) -> str:
 
     bullets = "\n".join(f"- {line}" for line in entries)
     return f"# 會議紀錄\n\n## 發言摘要\n{bullets}"
+
+
+def build_fallback_meeting_summary(transcript: str, meeting_title: str = "") -> MeetingSummary:
+    """Provide a readable local fallback when the optional summarizer is unavailable."""
+    highlights: list[str] = []
+    seen: set[str] = set()
+    for raw_line in transcript.splitlines():
+        match = re.match(r"^.+?[：:]\s*(.+)$", raw_line.strip())
+        content = (match.group(1) if match else raw_line).strip()
+        if not content or content in seen:
+            continue
+        seen.add(content)
+        highlights.append(_shorten_summary_item(content))
+        if len(highlights) == 5:
+            break
+
+    if not highlights:
+        return MeetingSummary("會議重點摘要", "目前沒有足夠的逐字稿內容可供整理。", [])
+
+    title = meeting_title.strip() if meeting_title.strip() and meeting_title.strip() != "未命名會議" else "會議重點摘要"
+    return MeetingSummary(title, "以下為根據本次逐字稿整理的重點。", highlights)
+
+
+def _shorten_summary_item(text: str, limit: int = 110) -> str:
+    if len(text) <= limit:
+        return text
+    sentence_end = max(text.rfind(mark, 0, limit) for mark in "。！？；")
+    return text[: sentence_end + 1 if sentence_end > 20 else limit].rstrip("，、；") + "…"
 
 
 def render_action_summary(cleaned_transcript: str) -> str:

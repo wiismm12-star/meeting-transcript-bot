@@ -23,6 +23,9 @@ dependencies = [
 pyannote = [
     "pyannote.audio>=4.0.0",
 ]
+whisper = [
+    "faster-whisper>=1.2.0",
+]
 
 [project.scripts]
 transcript-bot = "transcript_bot.main:main"

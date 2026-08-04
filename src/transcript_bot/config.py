@@ -7,7 +7,17 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     openai_api_key: str = ""
     deepgram_api_key: str = ""
+    deepgram_keyterms: str = ""
+    gladia_api_key: str = ""
     transcribe_provider: str = "deepgram"
+    whisper_model: str = "large-v3"
+    whisper_device: str = "cpu"
+    whisper_compute_type: str = "int8"
+    whisper_language: str = "zh"
+    whisper_initial_prompt: str = ""
+    whisper_model_dir: Path = Path("./data/models/whisper")
+    gladia_num_speakers: int = 0
+    gladia_vocabulary: str = ""
     openai_transcribe_model: str = "gpt-4o-transcribe-diarize"
     openai_text_model: str = "gpt-4.1-mini"
     enable_polish: bool = False
@@ -41,6 +51,8 @@ class Settings(BaseSettings):
             missing.append("OPENAI_API_KEY")
         if self.transcribe_provider == "deepgram" and not self.deepgram_api_key:
             missing.append("DEEPGRAM_API_KEY")
+        if self.transcribe_provider == "gladia" and not self.gladia_api_key:
+            missing.append("GLADIA_API_KEY")
         if self.enable_polish and self.polish_provider == "openai" and not self.openai_api_key:
             missing.append("OPENAI_API_KEY")
         if self.enable_pyannote_diarization and not self.pyannote_hf_token:
@@ -49,14 +61,16 @@ class Settings(BaseSettings):
             joined = ", ".join(missing)
             raise RuntimeError(f"缺少環境變數：{joined}，請先建立並設定 .env。")
 
-        if self.transcribe_provider not in {"deepgram", "openai"}:
-            raise RuntimeError("TRANSCRIBE_PROVIDER 只能是 deepgram 或 openai。")
+        if self.transcribe_provider not in {"deepgram", "gladia", "openai", "whisper"}:
+            raise RuntimeError("TRANSCRIBE_PROVIDER 只能是 deepgram、gladia、openai 或 whisper。")
         if self.polish_provider not in {"ollama", "openai"}:
             raise RuntimeError("POLISH_PROVIDER 只能是 ollama 或 openai。")
-        if self.enable_pyannote_diarization and self.transcribe_provider != "deepgram":
-            raise RuntimeError("啟用 pyannote 語者分離時，TRANSCRIBE_PROVIDER 必須設為 deepgram。")
+        if self.enable_pyannote_diarization and self.transcribe_provider not in {"deepgram", "whisper"}:
+            raise RuntimeError("啟用 pyannote 語者分離時，TRANSCRIBE_PROVIDER 必須設為 deepgram 或 whisper。")
         if self.pyannote_num_speakers < 0:
             raise RuntimeError("PYANNOTE_NUM_SPEAKERS 必須是 0 或正整數。")
+        if self.gladia_num_speakers < 0:
+            raise RuntimeError("GLADIA_NUM_SPEAKERS 必須是 0 或正整數。")
 
 
 settings = Settings()

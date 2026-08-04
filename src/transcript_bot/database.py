@@ -25,7 +25,10 @@ class MeetingExportRecord:
     id: str
     user_id: int
     created_at: str
+    title: str
+    notes: str
     transcript_text: str
+    summary_text: str
     transcript_txt_path: str
     transcript_docx_path: str
 
@@ -54,7 +57,10 @@ def init_database(data_dir: Path) -> None:
                 normalized_audio_path TEXT NOT NULL,
                 transcript_txt_path TEXT NOT NULL,
                 transcript_docx_path TEXT NOT NULL,
-                transcript_text TEXT NOT NULL DEFAULT ''
+                transcript_text TEXT NOT NULL DEFAULT '',
+                summary_text TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS transcript_segments (
@@ -91,6 +97,9 @@ def init_database(data_dir: Path) -> None:
             """
         )
         _ensure_column(conn, "meetings", "transcript_text", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "meetings", "summary_text", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "meetings", "title", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "meetings", "notes", "TEXT NOT NULL DEFAULT ''")
 
 
 def create_meeting(data_dir: Path, meeting: MeetingRecord) -> None:
@@ -152,8 +161,40 @@ def save_transcript_segments(data_dir: Path, meeting_id: str, segments: Iterable
 def update_meeting_transcript_text(data_dir: Path, meeting_id: str, transcript_text: str) -> None:
     with _connect(data_dir) as conn:
         conn.execute(
-            "UPDATE meetings SET transcript_text = ? WHERE id = ?",
+            "UPDATE meetings SET transcript_text = ?, summary_text = '' WHERE id = ?",
             (transcript_text, meeting_id),
+        )
+
+
+def update_meeting_summary_text(data_dir: Path, meeting_id: str, summary_text: str) -> None:
+    with _connect(data_dir) as conn:
+        conn.execute(
+            "UPDATE meetings SET summary_text = ? WHERE id = ?",
+            (summary_text, meeting_id),
+        )
+
+
+def update_transcript_segment_text(
+    data_dir: Path, meeting_id: str, user_id: int, sequence: int, text: str
+) -> bool:
+    with _connect(data_dir) as conn:
+        result = conn.execute(
+            """
+            UPDATE transcript_segments
+            SET text = ?
+            WHERE meeting_id = ? AND sequence = ?
+              AND EXISTS (SELECT 1 FROM meetings WHERE id = ? AND user_id = ?)
+            """,
+            (text, meeting_id, sequence, meeting_id, user_id),
+        )
+    return result.rowcount == 1
+
+
+def update_meeting_metadata(data_dir: Path, meeting_id: str, title: str, notes: str) -> None:
+    with _connect(data_dir) as conn:
+        conn.execute(
+            "UPDATE meetings SET title = ?, notes = ? WHERE id = ?",
+            (title, notes, meeting_id),
         )
 
 
@@ -165,7 +206,10 @@ def get_meeting_export(data_dir: Path, meeting_id: str, user_id: int) -> Meeting
                 id,
                 user_id,
                 created_at,
+                title,
+                notes,
                 transcript_text,
+                summary_text,
                 transcript_txt_path,
                 transcript_docx_path
             FROM meetings
@@ -182,7 +226,7 @@ def get_local_meeting_export(data_dir: Path, meeting_id: str) -> MeetingExportRe
     with _connect(data_dir) as conn:
         row = conn.execute(
             """
-            SELECT id, user_id, created_at, transcript_text, transcript_txt_path, transcript_docx_path
+            SELECT id, user_id, created_at, title, notes, transcript_text, summary_text, transcript_txt_path, transcript_docx_path
             FROM meetings
             WHERE id = ?
             """,
@@ -196,7 +240,7 @@ def list_local_meeting_exports(data_dir: Path, limit: int = 100) -> list[Meeting
     with _connect(data_dir) as conn:
         rows = conn.execute(
             """
-            SELECT id, user_id, created_at, transcript_text, transcript_txt_path, transcript_docx_path
+            SELECT id, user_id, created_at, title, notes, transcript_text, summary_text, transcript_txt_path, transcript_docx_path
             FROM meetings
             ORDER BY created_at DESC
             LIMIT ?
@@ -209,13 +253,16 @@ def list_local_meeting_exports(data_dir: Path, limit: int = 100) -> list[Meeting
 def get_local_meeting_audio_path(data_dir: Path, meeting_id: str) -> Path | None:
     with _connect(data_dir) as conn:
         row = conn.execute(
-            "SELECT audio_file_path FROM meetings WHERE id = ?",
+            "SELECT audio_file_path, normalized_audio_path FROM meetings WHERE id = ?",
             (meeting_id,),
         ).fetchone()
     if not row:
         return None
-    path = Path(str(row["audio_file_path"]))
-    return path if path.is_file() else None
+    normalized_path = Path(str(row["normalized_audio_path"]))
+    if normalized_path.is_file():
+        return normalized_path
+    input_path = Path(str(row["audio_file_path"]))
+    return input_path if input_path.is_file() else None
 
 
 def get_meeting_speaker_labels(data_dir: Path, meeting_id: str) -> list[str]:
@@ -332,6 +379,25 @@ def upsert_speaker_aliases(data_dir: Path, meeting_id: str, user_id: int, aliase
         )
 
 
+def replace_speaker_aliases(data_dir: Path, meeting_id: str, user_id: int, aliases: dict[str, str]) -> None:
+    """Replace all aliases for one meeting, allowing a local editor to reset names."""
+    with _connect(data_dir) as conn:
+        conn.execute(
+            "DELETE FROM speaker_aliases WHERE meeting_id = ? AND user_id = ?",
+            (meeting_id, user_id),
+        )
+        conn.executemany(
+            """
+            INSERT INTO speaker_aliases (meeting_id, user_id, original_label, display_name)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (meeting_id, user_id, original_label, display_name)
+                for original_label, display_name in aliases.items()
+            ],
+        )
+
+
 def get_speaker_aliases(data_dir: Path, meeting_id: str, user_id: int) -> dict[str, str]:
     with _connect(data_dir) as conn:
         rows = conn.execute(
@@ -371,7 +437,10 @@ def _meeting_export_from_row(row: sqlite3.Row | None) -> MeetingExportRecord | N
         id=str(row["id"]),
         user_id=int(row["user_id"]),
         created_at=str(row["created_at"]),
+        title=str(row["title"]),
+        notes=str(row["notes"]),
         transcript_text=str(row["transcript_text"]),
+        summary_text=str(row["summary_text"]),
         transcript_txt_path=str(row["transcript_txt_path"]),
         transcript_docx_path=str(row["transcript_docx_path"]),
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import json
 import unicodedata
 from difflib import SequenceMatcher
 
@@ -24,6 +25,14 @@ prefix or suffix that cannot be made correct without guessing. Output only the r
 with no title, explanation, Markdown, quotation, or speaker label.
 If the supplied text contains garbled or invalid display characters that cannot be
 repaired confidently, output exactly DROP.
+""".strip()
+_SUMMARY_SYSTEM_PROMPT = """
+You are a careful Traditional-Chinese meeting summarizer. Use only facts explicitly
+present in the supplied transcript. Return JSON only, with this exact shape:
+{"title":"...","overview":"...","highlights":["...","..."]}
+Write a concise title (max 26 Chinese characters), a 1-2 sentence overview, and 3-5
+concise highlights. Do not copy speaker labels, do not invent decisions, names, dates,
+or outcomes, and do not mention uncertain fragments as facts. Use Traditional Chinese.
 """.strip()
 
 
@@ -49,6 +58,46 @@ def polish_with_ollama(raw_transcript: str) -> str:
                 output_lines.append(revised)
 
     return "\n".join(output_lines).strip()
+
+
+def summarize_meeting_with_ollama(raw_transcript: str, fallback_title: str = "") -> dict[str, object]:
+    """Return a structured, evidence-only summary from the local Ollama model."""
+    try:
+        response = httpx.post(
+            f"{settings.ollama_base_url.rstrip('/')}/api/chat",
+            json={
+                "model": settings.ollama_text_model,
+                "messages": [
+                    {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+                    {"role": "user", "content": raw_transcript},
+                ],
+                "stream": False,
+                "think": False,
+                "format": "json",
+                "options": {"temperature": 0.1},
+            },
+            timeout=180.0,
+        )
+    except httpx.RequestError as exc:
+        raise OllamaError("找不到本機 Ollama 服務，無法產生會議摘要。") from exc
+
+    if response.status_code != 200:
+        raise OllamaError("本機 Ollama 無法產生會議摘要。")
+
+    output = str(response.json().get("message", {}).get("content", "")).strip()
+    output = re.sub(r"^```(?:json)?\s*|\s*```$", "", output, flags=re.IGNORECASE)
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise OllamaError("本機 Ollama 回傳的摘要格式無法讀取。") from exc
+
+    title = str(payload.get("title", "")).strip()[:80]
+    overview = str(payload.get("overview", "")).strip()
+    raw_highlights = payload.get("highlights", [])
+    highlights = [str(item).strip() for item in raw_highlights if str(item).strip()] if isinstance(raw_highlights, list) else []
+    if not overview or not highlights:
+        raise OllamaError("本機 Ollama 未產生足夠的摘要內容。")
+    return {"title": title or fallback_title or "會議重點摘要", "overview": overview, "highlights": highlights[:5]}
 
 
 def _polish_paragraph(source: str) -> str:

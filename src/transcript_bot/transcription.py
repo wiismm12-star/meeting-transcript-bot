@@ -28,6 +28,21 @@ def transcribe_with_diarization(audio_path: Path) -> list[TranscriptSegment]:
             return apply_pyannote_speakers(transcript_segments, diarize_with_pyannote(audio_path))
         return transcribe_with_deepgram(audio_path)
 
+    if settings.transcribe_provider == "gladia":
+        from transcript_bot.gladia import transcribe_with_gladia
+
+        return transcribe_with_gladia(audio_path)
+
+    if settings.transcribe_provider == "whisper":
+        from transcript_bot.whisper_local import transcribe_with_local_whisper
+
+        transcript_segments = transcribe_with_local_whisper(audio_path)
+        if settings.enable_pyannote_diarization:
+            from transcript_bot.pyannote_diarization import apply_pyannote_speakers, diarize_with_pyannote
+
+            return apply_pyannote_speakers(transcript_segments, diarize_with_pyannote(audio_path))
+        return transcript_segments
+
     client = OpenAI(api_key=settings.openai_api_key)
     with audio_path.open("rb") as audio_file:
         response = client.audio.transcriptions.create(

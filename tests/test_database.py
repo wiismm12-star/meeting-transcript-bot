@@ -13,6 +13,8 @@ from transcript_bot.database import (
     get_speaker_aliases,
     init_database,
     save_transcript_segments,
+    update_meeting_summary_text,
+    update_meeting_transcript_text,
     upsert_speaker_aliases,
 )
 from transcript_bot.transcription import TranscriptSegment
@@ -66,6 +68,13 @@ class DeleteMeetingTests(unittest.TestCase):
         self.assertIsNotNone(meeting)
         assert meeting is not None
         self.assertRegex(meeting.created_at, r"^\d{4}-\d{2}-\d{2}")
+
+    def test_transcript_change_invalidates_cached_summary(self) -> None:
+        update_meeting_summary_text(self.data_dir, self.meeting_id, '{"title":"舊摘要"}')
+        update_meeting_transcript_text(self.data_dir, self.meeting_id, "Speaker 1：更新後內容")
+        meeting = get_meeting_export(self.data_dir, self.meeting_id, 1001)
+        assert meeting is not None
+        self.assertEqual(meeting.summary_text, "")
 
 
 if __name__ == "__main__":

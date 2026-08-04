@@ -14,13 +14,16 @@ class DeepgramError(RuntimeError):
 
 
 def transcribe_with_deepgram(audio_path: Path, word_timestamps: bool = False) -> list[TranscriptSegment]:
-    params = {
+    keyterms = [term.strip() for term in settings.deepgram_keyterms.split(",") if term.strip()]
+    params: dict[str, str | list[str]] = {
         "model": "nova-3",
         "smart_format": "true",
         "diarize_model": "latest",
         "utterances": "true",
-        "language": "zh",
+        "language": "zh-TW",
     }
+    if keyterms:
+        params["keyterm"] = keyterms
     headers = {
         "Authorization": f"Token {settings.deepgram_api_key}",
         "Content-Type": "audio/mpeg",

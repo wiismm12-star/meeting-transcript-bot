@@ -5,7 +5,7 @@
 ## 功能
 
 - 支援 Telegram 語音、音檔與音訊文件。
-- 預設使用 Deepgram Nova-3 進行中文轉錄。
+- 預設使用 Deepgram Nova-3 的台灣繁中模型進行中文轉錄；也可切換至 Gladia 的免費額度方案。
 - 支援 Deepgram 與可選的本機 pyannote.audio 多人語者分離；不需要在錄音中先自我介紹。
 - 將來源標籤正規化為 `Speaker 1`、`Speaker 2`，並可在每場會議個別命名。
 - 提供原始逐字稿、清理版、會議紀錄、決議事項摘要四種輸出模式。
@@ -21,7 +21,7 @@
 - Deepgram API Key
 - Ollama 與 `qwen3:8b`（預設本機潤稿；可選但建議安裝）
 
-OpenAI、pyannote.audio 與 SMTP 都是選用功能。
+OpenAI、Gladia、pyannote.audio 與 SMTP 都是選用功能。
 
 ## 本機安裝
 
@@ -47,6 +47,7 @@ Copy-Item .env.example .env
 TELEGRAM_BOT_TOKEN=你的_telegram_bot_token
 DEEPGRAM_API_KEY=你的_deepgram_api_key
 TRANSCRIBE_PROVIDER=deepgram
+DEEPGRAM_KEYTERMS=
 ENABLE_POLISH=true
 POLISH_PROVIDER=ollama
 OLLAMA_BASE_URL=http://127.0.0.1:11434
@@ -56,6 +57,58 @@ MAX_AUDIO_MB=50
 ```
 
 請勿提交 `.env`、API Key、Token、音檔或 `data/` 資料夾。
+
+若會議常出現品牌、產品名、站名或人名，可加上以逗號分隔的 Deepgram 專有名詞提示，協助模型保留正確拼寫：
+
+```env
+DEEPGRAM_KEYTERMS=KKBOX,風雲榜,忠孝復興,文湖線,手扶梯
+```
+
+## Gladia 高準確轉錄（選用）
+
+Gladia 提供多人語者分離、中文與英文混說、自訂詞彙與免費額度。啟用後，音檔會上傳到 Gladia 雲端處理；轉錄完成後，本程式會盡力刪除該次 Gladia 工作與暫存音檔。
+
+1. 到 [Gladia](https://app.gladia.io/) 建立 API Key。
+2. 在 `.env` 填入：
+
+```env
+TRANSCRIBE_PROVIDER=gladia
+GLADIA_API_KEY=你的_gladia_api_key
+# 已知會議人數時可填入，例如 4；0 代表自動估計
+GLADIA_NUM_SPEAKERS=0
+# 以逗號分隔常見專有名詞，可提高辨識準確度
+GLADIA_VOCABULARY=KKBOX,風雲榜,文湖線,手扶梯
+```
+
+未設定時，專案仍會使用 Deepgram。Gladia 免費額度與服務條件依其官方方案為準。
+
+## 本機免費高準確轉錄（Whisper large-v3）
+
+Whisper 的模型權重可在本機下載與執行，因此音檔不會上傳到雲端，也沒有按分鐘計費。此專案使用較快的 `faster-whisper` 執行器，並保留逐段時間戳，可與 pyannote.audio 搭配分辨多人。
+
+你的 RTX 3060 是 4 GB VRAM，建議先使用 CPU INT8 跑 `large-v3`，避免 GPU 記憶體不足；雖然速度較慢，但品質優先。安裝一次執行器：
+
+```powershell
+uv sync --extra whisper
+```
+
+再將 `.env` 設為：
+
+```env
+TRANSCRIBE_PROVIDER=whisper
+WHISPER_MODEL=large-v3
+WHISPER_DEVICE=cpu
+WHISPER_COMPUTE_TYPE=int8
+WHISPER_LANGUAGE=zh
+# 專有名詞提示；可沿用既有 DEEPGRAM_KEYTERMS 的內容
+WHISPER_INITIAL_PROMPT=KKBOX,風雲榜,忠孝復興,文湖線,手扶梯
+WHISPER_MODEL_DIR=./data/models/whisper
+
+# 多人會議建議一起開啟；須另依下一節安裝與設定 pyannote
+ENABLE_PYANNOTE_DIARIZATION=true
+```
+
+第一次轉錄會下載 Whisper 模型權重至 `data/models/whisper`。此專案刻意不使用 Windows 的 Hugging Face 快取符號連結，因此不需要開啟開發人員模式。Whisper 負責辨識文字；多人分段仍須使用 pyannote.audio。模型不能保證 100% 還原，尤其是重疊說話、遠距收音與未提供的專有名詞，但這是目前最適合本機離線比較的方案。
 
 ## 本機免費潤稿（預設）
 
@@ -97,7 +150,7 @@ pyannote.audio 會依聲音特徵做分群，不需要主講人在錄音裡報�
 ```
 
 ```env
-TRANSCRIBE_PROVIDER=deepgram
+TRANSCRIBE_PROVIDER=whisper
 ENABLE_PYANNOTE_DIARIZATION=true
 PYANNOTE_HF_TOKEN=你的_Hugging_Face_Token
 PYANNOTE_NUM_SPEAKERS=0
@@ -151,7 +204,9 @@ ENABLE_EMAIL_DELIVERY=true
 .\.venv\Scripts\python.exe -m transcript_bot.web
 ```
 
-在這台電腦開啟 [http://127.0.0.1:8765](http://127.0.0.1:8765)。介面只綁定 loopback 位址，無法從同一網路的其他裝置連入；可直接編輯並儲存清理版逐字稿，並能點選原始段落跳至對應音檔時間。
+在這台電腦開啟 [http://127.0.0.1:8765](http://127.0.0.1:8765)。介面只綁定 loopback 位址，無法從同一網路的其他裝置連入；可直接編輯並儲存清理版逐字稿、批次設定主講人名稱、點選原始段落跳至對應音檔時間，並下載目前內容的 TXT 或 Word 檔。
+
+首頁也可直接上傳單一 `m4a`、`mp3`、`wav`、`ogg`、`webm`、`mp4` 或 `aac` 錄音檔，系統會在本機建立新的會議逐字稿。
 
 ## 資料保存與刪除
 
