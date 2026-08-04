@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,6 +43,9 @@ from transcript_bot.formatting import (
 )
 from transcript_bot.storage import create_job_paths
 from transcript_bot.transcription import transcribe_with_diarization
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -206,8 +210,9 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
         else:
             await message.reply_text("OpenAI API 暫時達到速率限制，請稍後再試。")
-    except Exception as exc:
-        await message.reply_text(f"處理失敗：{exc}")
+    except Exception:
+        logger.exception("Failed to process audio message")
+        await message.reply_text("處理失敗，請稍後再試，或改傳較短的音檔。")
 
 
 async def handle_export_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -293,15 +298,20 @@ async def _export_meeting_documents(message, context: ContextTypes.DEFAULT_TYPE,
     transcript_txt = Path(meeting.transcript_txt_path)
     transcript_docx = Path(meeting.transcript_docx_path)
 
-    await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
+    try:
+        await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
 
-    if export_type in {"txt", "both"}:
-        write_text(transcript_txt, transcript_text)
-        await _reply_document(message, transcript_txt, "文字稿 TXT")
+        if export_type in {"txt", "both"}:
+            write_text(transcript_txt, transcript_text)
+            await _reply_document(message, transcript_txt, "文字稿 TXT")
 
-    if export_type in {"docx", "both"}:
-        write_docx(transcript_docx, "會議逐字稿", transcript_text)
-        await _reply_document(message, transcript_docx, "文字稿 DOCX")
+        if export_type in {"docx", "both"}:
+            write_docx(transcript_docx, "會議逐字稿", transcript_text)
+            await _reply_document(message, transcript_docx, "文字稿 DOCX")
+    except Exception:
+        logger.exception("Failed to export meeting documents")
+        await message.reply_text("檔案輸出失敗，請稍後再試。")
+        return
 
     await message.reply_text(f"會議 {meeting_id} 的檔案已輸出完成。")
 

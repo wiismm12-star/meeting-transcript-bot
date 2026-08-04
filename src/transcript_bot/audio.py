@@ -32,4 +32,4 @@ def normalize_audio(input_path: Path, output_path: Path) -> None:
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:
-        raise AudioProcessingError(result.stderr.strip() or "ffmpeg 轉檔失敗。")
+        raise AudioProcessingError("音訊轉檔失敗，請確認檔案格式正確，或改傳其他音訊檔。")

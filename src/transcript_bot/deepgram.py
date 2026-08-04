@@ -106,11 +106,13 @@ def _parse_words(payload: dict[str, Any]) -> list[TranscriptSegment]:
 
 
 def _format_deepgram_error(response: httpx.Response) -> str:
-    try:
-        detail = response.json()
-    except ValueError:
-        detail = response.text
-    return f"Deepgram API 錯誤 {response.status_code}：{detail}"
+    if response.status_code in {401, 403}:
+        return "Deepgram API 認證失敗，請確認伺服器端 API key 設定。"
+    if response.status_code == 429:
+        return "Deepgram API 暫時達到用量或速率限制，請稍後再試。"
+    if response.status_code >= 500:
+        return "Deepgram API 暫時無法處理請求，請稍後再試。"
+    return f"Deepgram API 回傳錯誤 {response.status_code}，請確認音檔格式後再試。"
 
 
 def _to_float(value: Any) -> float | None:

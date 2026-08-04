@@ -44,7 +44,7 @@
 - [x] 暫不實作 `/rename`；目前以輸出前 Speaker 範本與最近一次會議簡化格式處理主講人命名
 - [x] 支援修改 speaker alias 後重新匯出 txt/docx
 - [ ] 支援 `/delete <meeting_id>` 刪除會議資料
-- [ ] 錯誤訊息不得洩露 API key、token 或敏感路徑
+- [x] 錯誤訊息不得洩露 API key、token 或敏感路徑
 - [ ] Telegram 回覆文字統一繁體中文
 
 ### 第三批：輸出格式與會議稿模板
