@@ -68,7 +68,7 @@
 - [x] 支援 `/mode cleaned`
 - [x] 支援 `/mode minutes`
 - [x] 支援 `/mode summary`
-- [ ] 匯出檔名包含日期與 meeting id
+- [x] 匯出檔名包含日期與 meeting id
 - [ ] Word 檔加入標題、日期、主講人列表與段落樣式
 
 ### 第四批：測試與品質

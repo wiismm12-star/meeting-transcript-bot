@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -22,6 +23,7 @@ def ensure_data_dirs(data_dir: Path) -> None:
 
 def create_job_paths(data_dir: Path, suffix: str) -> JobPaths:
     job_id = uuid4().hex
+    date_prefix = datetime.now().strftime("%Y%m%d")
     job_dir = data_dir / "jobs" / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
 
@@ -31,6 +33,6 @@ def create_job_paths(data_dir: Path, suffix: str) -> JobPaths:
         job_dir=job_dir,
         input_audio=job_dir / f"input{clean_suffix}",
         normalized_audio=job_dir / "normalized.mp3",
-        transcript_txt=job_dir / "transcript.txt",
-        transcript_docx=job_dir / "transcript.docx",
+        transcript_txt=job_dir / f"meeting_{date_prefix}_{job_id}.txt",
+        transcript_docx=job_dir / f"meeting_{date_prefix}_{job_id}.docx",
     )
