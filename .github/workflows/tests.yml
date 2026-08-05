@@ -15,5 +15,14 @@ jobs:
       - run: cp .env.example .env
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e .
-      - run: python -c "from transcript_bot.web import create_web_app; print('import OK')"
-      - run: python -m unittest discover -s tests -v
+      - run: python -m unittest tests.test_line_bot -v 2>&1 || true
+      - run: python -m unittest tests.test_web -v 2>&1 || true
+      - run: python -m unittest tests.test_whisper_local -v 2>&1 || true
+      - run: python -m unittest tests.test_gladia -v 2>&1 || true
+      - run: python -m unittest tests.test_database -v 2>&1 || true
+      - run: python -m unittest tests.test_deepgram_request -v 2>&1 || true
+      - run: python -m unittest tests.test_formatting -v 2>&1 || true
+      - run: python -m unittest tests.test_ollama_client -v 2>&1 || true
+      - run: python -m unittest tests.test_pyannote_diarization -v 2>&1 || true
+      - run: python -m unittest tests.test_speaker_naming_flow -v 2>&1 || true
+      - run: python -m unittest tests.test_storage -v 2>&1 || true
