@@ -31,3 +31,21 @@ def normalize_audio(input_path: Path, output_path: Path) -> None:
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise AudioProcessingError("音訊轉檔失敗，請確認檔案格式正確，或改傳其他音訊檔。")
+
+
+def get_audio_duration(path: Path) -> float:
+    """Return audio duration in seconds using ffprobe (requires ffmpeg)."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-show_entries",
+            "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        return 0.0
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        return 0.0

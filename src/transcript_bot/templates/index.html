@@ -5,31 +5,91 @@
     <div><p class="eyebrow">LOCAL MEETING WORKBENCH</p><h1>本機逐字稿校稿</h1><p class="hero-copy">上傳錄音、校對逐字稿，將每一場會議整理成可閱讀的紀錄。</p><p class="local-badge"><span>●</span> 僅限本機使用 · 127.0.0.1</p></div>
     <div class="hero-mark" aria-hidden="true"><span>〰</span><i></i><i></i><i></i></div>
   </section>
-  {% if upload_error %}<p class="error">{{ upload_error }}</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if deleted_count %}<p class="notice">已刪除 {{ deleted_count }} 場會議。</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}
+  {% if upload_error %}<p class="error">{{ upload_error }}</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if deleted_count %}<p class="notice">已刪除 {{ deleted_count }} 場會議。</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if cancelled %}<p class="notice">已終止轉錄，音檔已釋放。</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if request.args.get('uploaded') %}<p class="notice">音檔已上傳，正在背景轉錄中…</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}
   <section class="upload-panel">
     <div class="section-heading"><div><p class="eyebrow">NEW TRANSCRIPT</p><h2>新增一場會議</h2></div><span class="format-note">m4a · mp3 · wav · ogg · webm · mp4 · aac</span></div>
     <form class="upload-form" method="post" action="{{ url_for('upload_audio') }}" enctype="multipart/form-data">
       <label class="file-drop" for="audio-file"><span class="upload-icon">↑</span><span><strong>選擇錄音檔</strong><small id="file-name">或將檔案拖放到這裡</small></span><input id="audio-file" type="file" name="audio_file" accept="audio/*,.m4a,.mp4,.webm" required></label>
-      <button class="primary-button" type="submit">開始轉錄 <span>→</span></button>
+      <button class="primary-button" type="submit" id="submit-btn">開始轉錄 <span>→</span></button>
     </form>
   </section>
-  <script>document.getElementById('audio-file').addEventListener('change',event=>{const file=event.target.files[0];document.getElementById('file-name').textContent=file?file.name:'或將檔案拖放到這裡';});</script>
-  {% if meetings %}
-    <form id="bulk-delete-form" method="post" action="{{ url_for('delete_selected_local_meetings') }}">
-      <div class="meeting-list-heading"><div><p class="eyebrow">YOUR RECORDINGS</p><h2>最近會議 <span>{{ meetings|length }}</span></h2></div><div class="meeting-list-actions"><label class="select-all"><input id="select-all-meetings" type="checkbox"> 全選</label><span id="selected-count" class="meta">尚未選取</span><button id="delete-selected" class="danger-button" type="submit" disabled>刪除已選會議</button></div></div>
-      {% for meeting in meetings %}
-        <section class="card meeting-list-card" data-href="{{ url_for('edit_meeting', meeting_id=meeting.id) }}" role="link" tabindex="0" aria-label="開啟 {{ meeting.title or meeting.created_at[:16] }} 工作台">
-          <label class="meeting-check"><input class="meeting-select" type="checkbox" name="meeting_ids" value="{{ meeting.id }}" aria-label="選取 {{ meeting.title or meeting.created_at[:16] }}"><span></span></label>
-          <div class="meeting-list-content"><div class="meeting-title-row"><strong>{{ meeting.title or meeting.created_at[:16] }}</strong><time>{{ meeting.created_at[:16] }}</time></div><div class="meeting-id"># {{ meeting.id[:12] }}</div><p>{{ meeting.transcript_text[:150] if meeting.transcript_text else '逐字稿尚在處理中，或尚未辨識到內容。' }}{% if meeting.transcript_text|length > 150 %}…{% endif %}</p><a class="open-meeting" href="{{ url_for('edit_meeting', meeting_id=meeting.id) }}">開啟工作台 <span>→</span></a></div>
+  <script>const audioInput=document.getElementById('audio-file'),fileName=document.getElementById('file-name');audioInput.addEventListener('change',event=>{const file=event.target.files[0];fileName.textContent=file?file.name:'或將檔案拖放到這裡';});window.addEventListener('pageshow',()=>{audioInput.value='';fileName.textContent='或將檔案拖放到這裡';});
+  const dropZone=document.querySelector('.file-drop');
+  ['dragenter','dragover'].forEach(ev=>dropZone.addEventListener(ev,e=>{e.preventDefault();dropZone.classList.add('drag-over');}));
+  ['dragleave','drop'].forEach(ev=>dropZone.addEventListener(ev,e=>{e.preventDefault();dropZone.classList.remove('drag-over');}));
+  dropZone.addEventListener('drop',e=>{const files=e.dataTransfer.files;if(files.length){audioInput.files=files;fileName.textContent=files[0].name;}});
+  </script>
+
+  {% if active_meetings or done_meetings %}
+    {# ── 轉錄中 ── #}
+    {% if active_meetings %}
+    <div class="meeting-list-heading"><div><p class="eyebrow">PROCESSING</p><h2>轉錄中 <span>{{ active_meetings|length }}</span></h2></div></div>
+      {% for meeting in active_meetings %}
+        {% set is_active = meeting.id in active_jobs %}
+        {% set display_name = meeting.title or (meeting.audio_file_path | basename if meeting.audio_file_path else meeting.created_at[:16]) %}
+        <section class="card meeting-list-card processing-card compact" role="region" aria-label="{{ '轉錄中' if is_active else '轉錄未完成' }} {{ display_name }}">
+          <div class="meeting-list-content"><div class="meeting-title-row"><strong>{{ display_name }}</strong><span class="meeting-id"># {{ meeting.id[:12] }}</span><span class="meeting-date">{{ meeting.created_at[:10] }}</span><span class="meeting-time">{{ meeting.created_at[11:16] }}</span>{% if is_active %}<span class="status-badge processing">● 轉錄中…</span>{% else %}<span class="status-badge failed">轉錄未完成</span>{% endif %}</div>{% if is_active %}{% set prog = job_progress.get(meeting.id, {}) %}<div class="progress-wrap"><div class="progress-stage" id="prog-stage-{{ meeting.id[:12] }}">{{ prog.label if prog.label else '初始化' }}</div><div class="progress-row"><div class="progress-bar" id="prog-{{ meeting.id[:12] }}"><div class="progress-fill" style="width:{{ prog.pct if prog.pct else 0 }}%"></div></div><span class="progress-text" id="prog-text-{{ meeting.id[:12] }}">{{ prog.pct if prog.pct else 0 }}%</span></div></div>{% endif %}<div class="meeting-actions"><form method="post" action="{{ url_for('delete_local_meeting', meeting_id=meeting.id) }}" style="display:inline" onsubmit="return confirm('確定要終止此會議的轉錄並刪除已上傳的音檔嗎？')"><input type="hidden" name="cancelled" value="1"><button type="submit" class="cancel-transcribe">✕ 終止轉錄</button></form></div></div>
         </section>
       {% endfor %}
-    </form>
-    <script>
-      const selections=[...document.querySelectorAll('.meeting-select')],selectAll=document.getElementById('select-all-meetings'),count=document.getElementById('selected-count'),remove=document.getElementById('delete-selected');
-      const syncSelection=()=>{const picked=selections.filter(item=>item.checked).length;count.textContent=picked?`已選取 ${picked} 場會議`:'尚未選取';remove.disabled=!picked;selectAll.checked=picked===selections.length;selectAll.indeterminate=picked>0&&picked<selections.length;};
-      selectAll.addEventListener('change',()=>{selections.forEach(item=>item.checked=selectAll.checked);syncSelection();});selections.forEach(item=>item.addEventListener('change',syncSelection));document.getElementById('bulk-delete-form').addEventListener('submit',event=>{const picked=selections.filter(item=>item.checked).length;if(!picked||!confirm(`確定要刪除 ${picked} 場會議及其本機音檔嗎？此操作無法復原。`))event.preventDefault();});document.querySelectorAll('.meeting-list-card[data-href]').forEach(card=>{const open=()=>location.assign(card.dataset.href);card.addEventListener('click',event=>{if(!event.target.closest('input,label,a,button'))open();});card.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open();}});});syncSelection();
-    </script>
+    {% endif %}
+
+    {# ── 最近會議 ── #}
+    <div class="meeting-list-heading"><div><p class="eyebrow">YOUR RECORDINGS</p><h2>最近會議 <span>{{ done_meetings|length }}</span></h2></div><div class="meeting-list-actions"><label class="select-all"><input id="select-all-meetings" type="checkbox"> 全選</label><span id="selected-count" class="meta">尚未選取</span><button id="delete-selected" class="danger-button" type="button">刪除已選會議</button></div></div>
+    {% if done_meetings %}
+      <form id="bulk-delete-form" method="post" action="{{ url_for('delete_selected_local_meetings') }}">
+        {% for meeting in done_meetings %}
+          <section class="card meeting-list-card" data-href="{{ url_for('edit_meeting', meeting_id=meeting.id) }}" role="link" tabindex="0" aria-label="開啟 {{ meeting.title or meeting.created_at[:16] }} 工作台">
+            <label class="meeting-check"><input class="meeting-select" type="checkbox" name="meeting_ids" value="{{ meeting.id }}" aria-label="選取 {{ meeting.title or meeting.created_at[:16] }}"><span></span></label>
+            <div class="meeting-list-content"><div class="meeting-title-row"><strong>{{ meeting.title or meeting.created_at[:16] }}</strong><time>{{ meeting.created_at[:16] }}</time></div><div class="meeting-id"># {{ meeting.id[:12] }}</div><p>{{ meeting.transcript_text[:150] }}{% if meeting.transcript_text|length > 150 %}…{% endif %}</p><div class="meeting-actions"><a class="open-meeting" href="{{ url_for('edit_meeting', meeting_id=meeting.id) }}">開啟工作台 <span>→</span></a></div></div>
+          </section>
+        {% endfor %}
+      </form>
+    {% else %}
+      <section class="empty-state"><div>⌁</div><h2>尚無會議資料</h2><p>從上方上傳第一段錄音，開始建立你的會議紀錄。</p></section>
+    {% endif %}
   {% else %}
     <section class="empty-state"><div>⌁</div><h2>尚無會議資料</h2><p>從上方上傳第一段錄音，開始建立你的會議紀錄。</p></section>
   {% endif %}
+
+  <script>
+    {# ── Bulk select/deselect for completed meetings only ── #}
+    const selections=[...document.querySelectorAll('.meeting-select')],selectAll=document.getElementById('select-all-meetings'),count=document.getElementById('selected-count');
+    if(selectAll){
+      const syncSelection=()=>{const picked=selections.filter(item=>item.checked).length;count.textContent=picked?`已選取 ${picked} 場會議`:'尚未選取';selectAll.checked=selections.length>0&&picked===selections.length;selectAll.indeterminate=picked>0&&picked<selections.length;};
+      selectAll.addEventListener('change',()=>{selections.forEach(item=>item.checked=selectAll.checked);syncSelection();});selections.forEach(item=>item.addEventListener('change',syncSelection));
+      document.getElementById('delete-selected').addEventListener('click',()=>{const picked=selections.filter(item=>item.checked).length;if(!picked){alert('請先選取要刪除的會議。');return;}if(!confirm(`確定要刪除 ${picked} 場會議及其本機音檔嗎？此操作無法復原。`))return;document.getElementById('bulk-delete-form').submit();});
+      syncSelection();
+    }
+    {# ── Card click navigation for completed meetings only ── #}
+    document.querySelectorAll('.meeting-list-card[data-href]').forEach(card=>{
+      if(!card.dataset.href)return;
+      const open=()=>location.assign(card.dataset.href);
+      card.addEventListener('click',event=>{if(!event.target.closest('input,label,a,button'))open();});
+      card.addEventListener('keydown',event=>{if((event.key==='Enter'||event.key===' ')&&!event.target.closest('input,label')){event.preventDefault();open();}});
+    });
+    {# ── Progress polling + auto-refresh ── #}
+    {% if active_jobs|length > 0 %}
+    const pollProgress=()=>{
+      const jobs={{ active_jobs.keys()|list|tojson }};
+      if(!jobs.length){location.reload();return;}
+      Promise.all(jobs.map(jid=>
+        fetch('/api/jobs/'+jid+'/progress').then(r=>r.json()).then(data=>{
+          const short=jid.substring(0,12), bar=document.getElementById('prog-'+short);
+          if(!bar)return data;
+          const pct=data.pct||0, fill=bar.querySelector('.progress-fill');
+          if(fill)fill.style.width=pct+'%';
+          const txt=document.getElementById('prog-text-'+short);
+          if(txt)txt.textContent=pct+'%';
+          const stage=document.getElementById('prog-stage-'+short);
+          if(stage&&data.label)stage.textContent=data.label;
+          return data;
+        })
+      )).then(results=>{
+        const allDone=results.every(d=>!d.active);
+        if(allDone)location.reload();else setTimeout(pollProgress,2000);
+      });
+    };
+    pollProgress();
+    {% endif %}
+  </script>
 {% endblock %}

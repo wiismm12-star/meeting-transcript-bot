@@ -11,7 +11,7 @@ class LocalWhisperError(RuntimeError):
     """Raised when the optional local Whisper runtime cannot transcribe audio."""
 
 
-def transcribe_with_local_whisper(audio_path: Path) -> list[TranscriptSegment]:
+def transcribe_with_local_whisper(audio_path: Path, progress_callback=None) -> list[TranscriptSegment]:
     """Transcribe locally with faster-whisper, including timestamps for diarization."""
     try:
         from faster_whisper import WhisperModel
@@ -25,10 +25,9 @@ def transcribe_with_local_whisper(audio_path: Path) -> list[TranscriptSegment]:
     try:
         if not (model_dir / "model.bin").is_file():
             model_dir.mkdir(parents=True, exist_ok=True)
-            # output_dir writes real files instead of Hugging Face cache symlinks.
             download_model(settings.whisper_model, output_dir=str(model_dir))
         model = WhisperModel(str(model_dir), device=device, compute_type=compute_type)
-        segments, _ = model.transcribe(
+        segments_iter, _ = model.transcribe(
             str(audio_path),
             language=settings.whisper_language or None,
             task="transcribe",
@@ -37,11 +36,16 @@ def transcribe_with_local_whisper(audio_path: Path) -> list[TranscriptSegment]:
             condition_on_previous_text=False,
             initial_prompt=prompt or None,
         )
-        result = [
-            TranscriptSegment("UNASSIGNED", float(segment.start), float(segment.end), segment.text.strip())
-            for segment in segments
-            if segment.text.strip()
-        ]
+        result = []
+        for segment in segments_iter:
+            if segment.text.strip():
+                result.append(
+                    TranscriptSegment("UNASSIGNED", float(segment.start), float(segment.end), segment.text.strip())
+                )
+                if progress_callback and segment.end:
+                    progress_callback(segment.end, getattr(segment, "end", 0))
+        if progress_callback:
+            progress_callback(-1, -1)  # signal completion
     except PermissionError as exc:
         raise LocalWhisperError("本機 Whisper 模型目錄沒有寫入權限，請確認 data/models 可寫入。") from exc
     except Exception as exc:

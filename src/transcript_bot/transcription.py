@@ -17,7 +17,7 @@ class TranscriptSegment:
     text: str
 
 
-def transcribe_with_diarization(audio_path: Path) -> list[TranscriptSegment]:
+def transcribe_with_diarization(audio_path: Path, progress_callback=None) -> list[TranscriptSegment]:
     if settings.transcribe_provider == "deepgram":
         from transcript_bot.deepgram import transcribe_with_deepgram
 
@@ -36,7 +36,7 @@ def transcribe_with_diarization(audio_path: Path) -> list[TranscriptSegment]:
     if settings.transcribe_provider == "whisper":
         from transcript_bot.whisper_local import transcribe_with_local_whisper
 
-        transcript_segments = transcribe_with_local_whisper(audio_path)
+        transcript_segments = transcribe_with_local_whisper(audio_path, progress_callback=progress_callback)
         if settings.enable_pyannote_diarization:
             from transcript_bot.pyannote_diarization import apply_pyannote_speakers, diarize_with_pyannote
 

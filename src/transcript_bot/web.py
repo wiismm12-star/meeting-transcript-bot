@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 import shutil
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, url_for
 from werkzeug.utils import secure_filename
 
-from transcript_bot.audio import AudioProcessingError, normalize_audio
+from transcript_bot.audio import AudioProcessingError, get_audio_duration, normalize_audio
 from transcript_bot.config import settings
 from transcript_bot.database import (
     MeetingRecord,
@@ -41,6 +42,12 @@ from transcript_bot.exporters import write_docx, write_text
 from transcript_bot.storage import create_job_paths, ensure_data_dirs
 from transcript_bot.transcription import transcribe_with_diarization
 from transcript_bot.ollama_client import OllamaError, summarize_meeting_with_ollama
+from transcript_bot.line_bot import LineBotError, acknowledgement_for_event, reply_to_line, verify_webhook_signature
+
+# Module-level job tracking for async transcription
+_active_jobs: dict[str, threading.Thread] = {}
+_cancel_flags: dict[str, threading.Event] = {}
+_job_progress: dict[str, dict] = {}  # {job_id: {"step": str, "pct": int}}
 
 
 def create_web_app(data_dir: Path | None = None) -> Flask:
@@ -49,17 +56,33 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
     ensure_data_dirs(active_data_dir)
     init_database(active_data_dir)
 
+    # Clean up orphaned meetings from killed processes (empty transcript, no active thread)
+    _purge_orphaned_meetings(active_data_dir)
+
     app = Flask(__name__)
     app.config["DATA_DIR"] = active_data_dir
+    app.jinja_env.auto_reload = True  # always reload templates in dev
+    app.add_template_filter(lambda p: Path(p).stem if p else "", "basename")
+
+    @app.after_request
+    def _no_cache(response):
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+        return response
 
     @app.get("/")
     def index():
         meetings = list_local_meeting_exports(app.config["DATA_DIR"])
+        active_meetings = [m for m in meetings if not m.transcript_text]
+        done_meetings = [m for m in meetings if m.transcript_text]
         return render_template(
             "index.html",
-            meetings=meetings,
+            active_meetings=active_meetings,
+            done_meetings=done_meetings,
             upload_error=request.args.get("error"),
             deleted_count=request.args.get("deleted", type=int),
+            cancelled=request.args.get("cancelled") == "1",
+            active_jobs=_active_jobs,
+            job_progress=_job_progress,
         )
 
     @app.post("/upload")
@@ -93,23 +116,50 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
                     transcript_docx_path=str(paths.transcript_docx),
                 ),
             )
-            normalize_audio(paths.input_audio, paths.normalized_audio)
-            segments = normalize_speaker_labels(transcribe_with_diarization(paths.normalized_audio))
-            save_transcript_segments(app.config["DATA_DIR"], paths.job_id, segments)
-            raw_text = render_plain_transcript(segments)
-            transcript_text = polish_transcript(raw_text) if settings.enable_polish else polish_local_transcript(raw_text)
-            update_meeting_transcript_text(app.config["DATA_DIR"], paths.job_id, polish_local_transcript(transcript_text))
-            update_meeting_metadata(app.config["DATA_DIR"], paths.job_id, Path(original_filename).stem[:160], "")
-            summary = _generate_meeting_summary(transcript_text, Path(original_filename).stem[:160])
-            update_meeting_summary_text(app.config["DATA_DIR"], paths.job_id, _serialize_summary(summary))
-        except (AudioProcessingError, OSError, RuntimeError) as exc:
-            failed_meeting = get_local_meeting_export(app.config["DATA_DIR"], paths.job_id)
-            if failed_meeting:
-                _delete_local_meeting_files(app.config["DATA_DIR"], paths.job_id)
-                delete_meeting(app.config["DATA_DIR"], paths.job_id, failed_meeting.user_id)
-            return redirect(url_for("index", error=f"處理音檔失敗：{exc}"))
 
-        return redirect(url_for("edit_meeting", meeting_id=paths.job_id))
+            # Set title immediately so the processing card shows the original filename
+            update_meeting_metadata(app.config["DATA_DIR"], paths.job_id, Path(original_filename).stem[:160], "")
+
+            # Start async background transcription
+            cancel_event = threading.Event()
+            _cancel_flags[paths.job_id] = cancel_event
+            thread = threading.Thread(
+                target=_process_job,
+                args=(app.config["DATA_DIR"], paths, original_filename, cancel_event),
+                daemon=True,
+            )
+            _active_jobs[paths.job_id] = thread
+            thread.start()
+
+        except OSError as exc:
+            return redirect(url_for("index", error=f"儲存音檔失敗：{exc}"))
+
+        return redirect(url_for("index", uploaded=paths.job_id))
+
+    @app.post("/line/webhook")
+    def line_webhook():
+        """A small, signed LINE ingress used for safe connectivity testing first."""
+        if not settings.enable_line_bot:
+            abort(404)
+        raw_body = request.get_data(cache=False)
+        signature = request.headers.get("X-Line-Signature", "")
+        if not verify_webhook_signature(raw_body, signature, settings.line_channel_secret):
+            return "invalid signature", 400
+        try:
+            payload = json.loads(raw_body)
+        except json.JSONDecodeError:
+            return "invalid payload", 400
+
+        for event in payload.get("events", []):
+            reply_token = str(event.get("replyToken") or "")
+            acknowledgement = acknowledgement_for_event(event)
+            if reply_token and acknowledgement:
+                try:
+                    reply_to_line(reply_token, settings.line_channel_access_token, acknowledgement)
+                except LineBotError:
+                    # LINE retries webhooks. Return success after signature verification to avoid duplicate retries.
+                    pass
+        return "OK", 200
 
     @app.route("/meetings/<meeting_id>", methods=["GET", "POST"])
     def edit_meeting(meeting_id: str):
@@ -213,9 +263,17 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
         meeting = get_local_meeting_export(app.config["DATA_DIR"], meeting_id)
         if not meeting:
             abort(404)
+
+        # Signal cancel if job is currently running
+        cancel_flag = _cancel_flags.get(meeting_id)
+        if cancel_flag:
+            cancel_flag.set()
+
         _delete_local_meeting_files(app.config["DATA_DIR"], meeting.id)
         if not delete_meeting(app.config["DATA_DIR"], meeting.id, meeting.user_id):
             abort(500)
+        if request.form.get("cancelled") == "1":
+            return redirect(url_for("index", cancelled="1"))
         return redirect(url_for("index"))
 
     @app.post("/meetings/delete-selected")
@@ -259,7 +317,70 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
             )
         return send_file(export_path, as_attachment=True, download_name=export_path.name)
 
+    @app.get("/api/jobs/<job_id>/progress")
+    def job_progress(job_id: str):
+        """Return transcription progress as JSON for JS polling."""
+        prog = _job_progress.get(job_id)
+        if not prog:
+            return jsonify({"active": False})
+        return jsonify({"active": True, "step": prog["step"], "pct": prog["pct"], "label": prog.get("label", prog["step"])})
+
     return app
+
+
+def _process_job(data_dir: str, paths, original_filename: str, cancel_event: threading.Event) -> None:
+    """Background thread with progress tracking: normalize → transcribe → polish → save."""
+    job_id = paths.job_id
+    _job_progress[job_id] = {"step": "loading", "pct": 0, "label": "loading (初始化)"}
+
+    try:
+        # Step 1: Normalize audio (0 → 25%)
+        if cancel_event.is_set():
+            return
+        _job_progress[job_id] = {"step": "normalizing", "pct": 5, "label": "normalizing (音檔標準化)"}
+        normalize_audio(paths.input_audio, paths.normalized_audio)
+        _job_progress[job_id] = {"step": "normalizing", "pct": 25, "label": "normalizing (音檔標準化)"}
+
+        # Get audio duration for percentage calculation
+        duration = get_audio_duration(paths.normalized_audio)
+
+        # Step 2: Transcribe with diarization (25 → 90%)
+        if cancel_event.is_set():
+            return
+
+        def _on_transcribe_progress(last_segment_time: float, _unused: float) -> None:
+            if last_segment_time < 0:  # signal: transcription complete
+                _job_progress[job_id] = {"step": "transcribing", "pct": 90, "label": "transcribing (語音辨識)"}
+                return
+            if duration > 0:
+                pct = min(90, 25 + int((last_segment_time / duration) * 65))
+                _job_progress[job_id] = {"step": "transcribing", "pct": pct, "label": "transcribing (語音辨識)"}
+
+        _job_progress[job_id] = {"step": "transcribing", "pct": 25, "label": "transcribing (語音辨識)"}
+        segments = normalize_speaker_labels(
+            transcribe_with_diarization(paths.normalized_audio, progress_callback=_on_transcribe_progress)
+        )
+
+        # Step 3: Polish & save (90 → 100%)
+        if cancel_event.is_set():
+            return
+        _job_progress[job_id] = {"step": "polishing", "pct": 92, "label": "polishing (潤稿整理)"}
+        save_transcript_segments(data_dir, job_id, segments)
+        raw_text = render_plain_transcript(segments)
+        transcript_text = polish_transcript(raw_text) if settings.enable_polish else polish_local_transcript(raw_text)
+        _job_progress[job_id] = {"step": "saving", "pct": 97, "label": "saving (儲存中)"}
+        update_meeting_transcript_text(data_dir, job_id, transcript_text)
+        update_meeting_metadata(data_dir, job_id, Path(original_filename).stem[:160], "")
+        summary = _generate_meeting_summary(transcript_text, Path(original_filename).stem[:160])
+        update_meeting_summary_text(data_dir, job_id, _serialize_summary(summary))
+        _job_progress[job_id] = {"step": "done", "pct": 100, "label": "done (完成)"}
+
+    except Exception:
+        pass  # failed — meeting stays in DB
+    finally:
+        _active_jobs.pop(job_id, None)
+        _cancel_flags.pop(job_id, None)
+        _job_progress.pop(job_id, None)
 
 
 def _restore_speaker_labels(text: str, aliases: dict[str, str]) -> str:
@@ -279,6 +400,15 @@ def _delete_local_meeting_files(data_dir: Path, meeting_id: str) -> None:
     job_dir = audio_path.parent.resolve()
     if job_dir.parent == jobs_dir and job_dir.exists():
         shutil.rmtree(job_dir)
+
+
+def _purge_orphaned_meetings(data_dir: str) -> None:
+    """Delete meetings with empty transcript that have no active background thread (leftover from killed server)."""
+    meetings = list_local_meeting_exports(data_dir)
+    for meeting in meetings:
+        if not meeting.transcript_text and meeting.id not in _active_jobs:
+            _delete_local_meeting_files(data_dir, meeting.id)
+            delete_meeting(data_dir, meeting.id, meeting.user_id)
 
 
 def _generate_meeting_summary(transcript: str, meeting_title: str) -> MeetingSummary:
@@ -318,6 +448,7 @@ def _deserialize_summary(value: str) -> MeetingSummary | None:
 
 def main() -> None:
     app = create_web_app()
+    app.jinja_env.auto_reload = True  # reload templates on every request in dev
     # Loopback binding is deliberate: this MVP must not be exposed to a network.
     app.run(host="127.0.0.1", port=8765, debug=False)
 

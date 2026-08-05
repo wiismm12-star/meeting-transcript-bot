@@ -158,6 +158,24 @@ PYANNOTE_NUM_SPEAKERS=0
 
 `PYANNOTE_NUM_SPEAKERS=0` 代表自動估計人數；已知是四人會議時，可設為 `4`。
 
+## LINE Bot 連線測試（第一階段）
+
+LINE Bot 入口目前先完成安全 webhook 與收訊回覆測試，尚未把 LINE 音檔送入背景轉錄。請在 LINE Developers 建立 Messaging API channel，取得 Channel secret 與 Channel access token，並在 `.env` 填入：
+
+```env
+ENABLE_LINE_BOT=true
+LINE_CHANNEL_SECRET=你的_channel_secret
+LINE_CHANNEL_ACCESS_TOKEN=你的_channel_access_token
+```
+
+LINE 需要公開 HTTPS webhook，不能直接連到 `127.0.0.1`。可先透過 Cloudflare Tunnel 或 ngrok 將本機的 `/line/webhook` 暫時公開，再在 LINE Developers Console 設定：
+
+```text
+https://你的公開網域/line/webhook
+```
+
+按 LINE Console 的「Verify」後應成功。傳送文字或音檔給官方帳號時，Bot 會回覆連線測試結果。LINE 的 webhook 會先驗證 `X-Line-Signature`，未通過驗證的請求不會被處理。
+
 ## 啟動與使用
 
 ```powershell
@@ -204,9 +222,21 @@ ENABLE_EMAIL_DELIVERY=true
 .\.venv\Scripts\python.exe -m transcript_bot.web
 ```
 
-在這台電腦開啟 [http://127.0.0.1:8765](http://127.0.0.1:8765)。介面只綁定 loopback 位址，無法從同一網路的其他裝置連入；可直接編輯並儲存清理版逐字稿、批次設定主講人名稱、點選原始段落跳至對應音檔時間，並下載目前內容的 TXT 或 Word 檔。
+在這台電腦開啟 [http://127.0.0.1:8765](http://127.0.0.1:8765)。介面只綁定 loopback 位址，無法從同一網路的其他裝置連入。
 
-首頁也可直接上傳單一 `m4a`、`mp3`、`wav`、`ogg`、`webm`、`mp4` 或 `aac` 錄音檔，系統會在本機建立新的會議逐字稿。
+### 上傳與轉錄
+
+首頁可直接**點選或拖放** `m4a`、`mp3`、`wav`、`ogg`、`webm`、`mp4` 或 `aac` 錄音檔，系統會在本機背景轉錄，**不阻塞網頁操作**。轉錄中會顯示即時進度條與階段標籤（如「transcribing (語音辨識) 42%」），完成後自動刷新會議清單。
+
+若不慎重複上傳或想放棄等待，可隨時點選 **✕ 終止轉錄** 刪除進行中的任務與暫存音檔。伺服器重啟時也會自動清除因異常中斷而殘留的未完成會議。
+
+### 校稿功能
+
+可直接編輯並儲存清理版逐字稿、批次設定主講人名稱、點選原始段落跳至對應音檔時間，並下載目前內容的 TXT 或 Word 檔。
+
+### 批次管理
+
+「最近會議」區塊支援**全選、多選**後一鍵刪除，刪除前會彈出二次確認視窗，防止誤刪。
 
 ## 資料保存與刪除
 

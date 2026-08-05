@@ -31,6 +31,7 @@ class MeetingExportRecord:
     summary_text: str
     transcript_txt_path: str
     transcript_docx_path: str
+    audio_file_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -211,7 +212,8 @@ def get_meeting_export(data_dir: Path, meeting_id: str, user_id: int) -> Meeting
                 transcript_text,
                 summary_text,
                 transcript_txt_path,
-                transcript_docx_path
+                transcript_docx_path,
+                audio_file_path
             FROM meetings
             WHERE id = ? AND user_id = ?
             """,
@@ -226,7 +228,7 @@ def get_local_meeting_export(data_dir: Path, meeting_id: str) -> MeetingExportRe
     with _connect(data_dir) as conn:
         row = conn.execute(
             """
-            SELECT id, user_id, created_at, title, notes, transcript_text, summary_text, transcript_txt_path, transcript_docx_path
+            SELECT id, user_id, created_at, title, notes, transcript_text, summary_text, transcript_txt_path, transcript_docx_path, audio_file_path
             FROM meetings
             WHERE id = ?
             """,
@@ -240,7 +242,7 @@ def list_local_meeting_exports(data_dir: Path, limit: int = 100) -> list[Meeting
     with _connect(data_dir) as conn:
         rows = conn.execute(
             """
-            SELECT id, user_id, created_at, title, notes, transcript_text, summary_text, transcript_txt_path, transcript_docx_path
+            SELECT id, user_id, created_at, title, notes, transcript_text, summary_text, transcript_txt_path, transcript_docx_path, audio_file_path
             FROM meetings
             ORDER BY created_at DESC
             LIMIT ?
@@ -443,4 +445,5 @@ def _meeting_export_from_row(row: sqlite3.Row | None) -> MeetingExportRecord | N
         summary_text=str(row["summary_text"]),
         transcript_txt_path=str(row["transcript_txt_path"]),
         transcript_docx_path=str(row["transcript_docx_path"]),
+        audio_file_path=str(row["audio_file_path"]),
     )

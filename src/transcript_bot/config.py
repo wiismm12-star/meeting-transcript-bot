@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_use_tls: bool = True
     enable_email_delivery: bool = False
+    enable_line_bot: bool = False
+    line_channel_secret: str = ""
+    line_channel_access_token: str = ""
     enable_pyannote_diarization: bool = False
     pyannote_hf_token: str = ""
     pyannote_num_speakers: int = 0
@@ -57,6 +60,10 @@ class Settings(BaseSettings):
             missing.append("OPENAI_API_KEY")
         if self.enable_pyannote_diarization and not self.pyannote_hf_token:
             missing.append("PYANNOTE_HF_TOKEN")
+        if self.enable_line_bot and not self.line_channel_secret:
+            missing.append("LINE_CHANNEL_SECRET")
+        if self.enable_line_bot and not self.line_channel_access_token:
+            missing.append("LINE_CHANNEL_ACCESS_TOKEN")
         if missing:
             joined = ", ".join(missing)
             raise RuntimeError(f"缺少環境變數：{joined}，請先建立並設定 .env。")
