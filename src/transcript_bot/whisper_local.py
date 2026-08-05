@@ -18,6 +18,7 @@ def load_whisper_model():
     Returns the loaded ``WhisperModel``. Raises ``LocalWhisperError`` if the
     optional dependency or model is unavailable.
     """
+    _register_nvidia_dlls()
     try:
         from faster_whisper import WhisperModel
         from faster_whisper.utils import download_model
@@ -97,3 +98,15 @@ def _runtime_options() -> tuple[str, str]:
 def _model_directory() -> Path:
     safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", settings.whisper_model).strip(".-") or "whisper-model"
     return settings.whisper_model_dir / safe_name
+
+
+def _register_nvidia_dlls() -> None:
+    """Make pip-installed NVIDIA CUDA DLLs discoverable on Windows."""
+    import os as _os
+    import sys as _sys
+    _venv = Path(_sys.prefix) if hasattr(_sys, "prefix") else Path(__file__).resolve().parents[3]
+    _nv = _venv / "Lib" / "site-packages" / "nvidia"
+    for _sub in ("cublas/bin", "cuda_runtime/bin"):
+        _p = _nv / _sub
+        if _p.is_dir():
+            _os.add_dll_directory(str(_p))

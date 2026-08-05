@@ -555,10 +555,28 @@ def _deserialize_summary(value: str) -> MeetingSummary | None:
 
 
 def main() -> None:
+    # Register bundled NVIDIA CUDA DLLs so ctranslate2 can find them on GPU.
+    _register_nvidia_dlls()
     app = create_web_app()
     app.jinja_env.auto_reload = True  # reload templates on every request in dev
     # Loopback binding is deliberate: this MVP must not be exposed to a network.
     app.run(host="127.0.0.1", port=8765, debug=False)
+
+
+def _register_nvidia_dlls() -> None:
+    """Add pip-installed NVIDIA CUDA library directories to the DLL search path.
+
+    ctranslate2 (faster-whisper's backend) needs cuBLAS at runtime when
+    ``WHISPER_DEVICE=cuda``.  The ``nvidia-cublas-cu12`` wheel ships the DLLs
+    under ``site-packages/nvidia/cublas/bin`` — Python won't find them without
+    ``os.add_dll_directory()`` on Windows.
+    """
+    import os as _os
+    _nvidia_root = Path(__file__).resolve().parents[2] / ".venv" / "Lib" / "site-packages" / "nvidia"
+    for _sub in ("cublas/bin", "cuda_runtime/bin"):
+        _candidate = _nvidia_root / _sub
+        if _candidate.is_dir():
+            _os.add_dll_directory(str(_candidate))
 
 
 if __name__ == "__main__":
