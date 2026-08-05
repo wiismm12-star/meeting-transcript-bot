@@ -15,4 +15,5 @@ jobs:
       - run: cp .env.example .env
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e .
+      - run: python -c "from transcript_bot.web import create_web_app; print('import OK')"
       - run: python -m unittest discover -s tests -v
