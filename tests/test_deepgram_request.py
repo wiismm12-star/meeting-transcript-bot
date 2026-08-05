@@ -25,7 +25,7 @@ class DeepgramRequestTests(unittest.TestCase):
             audio_path = Path(temp_dir) / "meeting.mp3"
             audio_path.write_bytes(b"test audio")
             with (
-                patch("transcript_bot.deepgram.settings", SimpleNamespace(deepgram_api_key="test-key", deepgram_keyterms="KKBOX,文湖線")),
+                patch("transcript_bot.deepgram.settings", SimpleNamespace(deepgram_api_key="test-key", deepgram_keyterms="KKBOX,文湖線", deepgram_timeout=900)),
                 patch("transcript_bot.deepgram.httpx.post", return_value=response) as post,
             ):
                 segments = transcribe_with_deepgram(audio_path)
@@ -51,7 +51,7 @@ class DeepgramRequestTests(unittest.TestCase):
             audio_path = Path(temp_dir) / "meeting.mp3"
             audio_path.write_bytes(b"test audio")
             with (
-                patch("transcript_bot.deepgram.settings", SimpleNamespace(deepgram_api_key="test-key", deepgram_keyterms="")),
+                patch("transcript_bot.deepgram.settings", SimpleNamespace(deepgram_api_key="test-key", deepgram_keyterms="", deepgram_timeout=900)),
                 patch("transcript_bot.deepgram.httpx.post", return_value=response),
             ):
                 segments = transcribe_with_deepgram(audio_path, word_timestamps=True)

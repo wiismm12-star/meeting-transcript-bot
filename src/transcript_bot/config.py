@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     deepgram_api_key: str = ""
     deepgram_keyterms: str = ""
+    deepgram_timeout: int = 900
     gladia_api_key: str = ""
     transcribe_provider: str = "deepgram"
     whisper_model: str = "large-v3"
@@ -38,7 +39,14 @@ class Settings(BaseSettings):
     pyannote_hf_token: str = ""
     pyannote_num_speakers: int = 0
     data_dir: Path = Path("./data")
-    max_audio_mb: int = 50
+    max_audio_mb: int = 200
+    # Long-recording support: split into chunks at silence boundaries and
+    # transcribe the chunks in parallel, then merge into one transcript.
+    chunk_max_seconds: int = 600
+    chunk_overlap_seconds: float = 1.5
+    chunk_min_silence_seconds: float = 0.5
+    chunk_max_workers: int = 4
+    max_concurrent_jobs: int = 2
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
@@ -78,6 +86,8 @@ class Settings(BaseSettings):
             raise RuntimeError("PYANNOTE_NUM_SPEAKERS 必須是 0 或正整數。")
         if self.gladia_num_speakers < 0:
             raise RuntimeError("GLADIA_NUM_SPEAKERS 必須是 0 或正整數。")
+        if self.max_concurrent_jobs < 1:
+            raise RuntimeError("MAX_CONCURRENT_JOBS 必須是 1 或以上的正整數。")
 
 
 settings = Settings()

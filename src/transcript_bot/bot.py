@@ -54,7 +54,7 @@ from transcript_bot.formatting import (
     render_action_summary,
 )
 from transcript_bot.storage import create_job_paths
-from transcript_bot.transcription import transcribe_with_diarization
+from transcript_bot.transcription import transcribe_audio_smart
 
 
 logger = logging.getLogger(__name__)
@@ -248,7 +248,7 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await telegram_file.download_to_drive(custom_path=paths.input_audio)
 
         normalize_audio(paths.input_audio, paths.normalized_audio)
-        segments = transcribe_with_diarization(paths.normalized_audio)
+        segments = transcribe_audio_smart(paths.normalized_audio)
         normalized_segments = normalize_speaker_labels(segments)
         save_transcript_segments(settings.data_dir, paths.job_id, normalized_segments)
 

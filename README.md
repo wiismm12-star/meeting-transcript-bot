@@ -263,6 +263,8 @@ GitHub Actions 會在每次 push 與 pull request 自動執行同一套測試。
 - Speaker 標籤代表不同聲音群組，不代表系統識別了真實身份。
 - 開源版不提供共用的 Telegram、Deepgram、OpenAI 或 Hugging Face API Key；請使用者自行建立與保管。
 - 請勿將機密會議資料上傳到未經組織核准的雲端服務。
+- 超過 1 小時的錄音會在後端自動切成約 10 分鐘的小段（於靜音處落刀、切口前後留 1.5 秒重疊），平行轉錄後合併成**一份**完整會議紀錄，使用者照常上傳整個音檔即可。相關參數見 `.env` 的 `CHUNK_MAX_SECONDS` / `CHUNK_OVERLAP_SECONDS` / `CHUNK_MAX_WORKERS`。
+- 上傳大小上限以「標準化後」為準（`MAX_AUDIO_MB`，預設 200 MB @ 64kbps ≈ 7 小時），標準化前的高音質大檔不會被直接擋掉。
 
 ## 授權、貢獻與安全通報
 

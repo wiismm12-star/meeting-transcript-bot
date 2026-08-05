@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 import re
 
@@ -11,8 +12,12 @@ class LocalWhisperError(RuntimeError):
     """Raised when the optional local Whisper runtime cannot transcribe audio."""
 
 
-def transcribe_with_local_whisper(audio_path: Path, progress_callback=None) -> list[TranscriptSegment]:
-    """Transcribe locally with faster-whisper, including timestamps for diarization."""
+def load_whisper_model():
+    """Load a faster-whisper model once; reused across parallel chunk jobs.
+
+    Returns the loaded ``WhisperModel``. Raises ``LocalWhisperError`` if the
+    optional dependency or model is unavailable.
+    """
     try:
         from faster_whisper import WhisperModel
         from faster_whisper.utils import download_model
@@ -27,6 +32,28 @@ def transcribe_with_local_whisper(audio_path: Path, progress_callback=None) -> l
             model_dir.mkdir(parents=True, exist_ok=True)
             download_model(settings.whisper_model, output_dir=str(model_dir))
         model = WhisperModel(str(model_dir), device=device, compute_type=compute_type)
+    except PermissionError as exc:
+        raise LocalWhisperError("本機 Whisper 模型目錄沒有寫入權限，請確認 data/models 可寫入。") from exc
+    except Exception as exc:
+        raise LocalWhisperError(
+            f"本機 Whisper 模型載入失敗（{device}/{compute_type}）。請稍後重試。"
+        ) from exc
+    model._whisper_prompt = prompt  # type: ignore[attr-defined]
+    return model
+
+
+def transcribe_with_local_whisper(audio_path: Path, progress_callback=None) -> list[TranscriptSegment]:
+    """Transcribe one audio file locally with faster-whisper, with timestamps."""
+    model = load_whisper_model()
+    return transcribe_chunk_with_model(model, audio_path, progress_callback=progress_callback)
+
+
+def transcribe_chunk_with_model(
+    model, audio_path: Path, progress_callback=None
+) -> list[TranscriptSegment]:
+    """Transcribe a single chunk using a pre-loaded model (thread-safe enough for CPU)."""
+    prompt = getattr(model, "_whisper_prompt", None)
+    try:
         segments_iter, _ = model.transcribe(
             str(audio_path),
             language=settings.whisper_language or None,
@@ -40,17 +67,15 @@ def transcribe_with_local_whisper(audio_path: Path, progress_callback=None) -> l
         for segment in segments_iter:
             if segment.text.strip():
                 result.append(
-                    TranscriptSegment("UNASSIGNED", float(segment.start), float(segment.end), segment.text.strip())
+                    TranscriptSegment(
+                        "UNASSIGNED", float(segment.start), float(segment.end), segment.text.strip()
+                    )
                 )
-                if progress_callback and segment.end:
-                    progress_callback(segment.end, getattr(segment, "end", 0))
-        if progress_callback:
-            progress_callback(-1, -1)  # signal completion
-    except PermissionError as exc:
-        raise LocalWhisperError("本機 Whisper 模型目錄沒有寫入權限，請確認 data/models 可寫入。") from exc
+                if progress_callback and segment.end is not None:
+                    progress_callback(segment.end, float(segment.end))
     except Exception as exc:
         raise LocalWhisperError(
-            f"本機 Whisper 轉錄或模型下載失敗（{device}/{compute_type}）。請稍後重試。"
+            f"本機 Whisper 轉錄失敗。請稍後重試。"
         ) from exc
 
     if not result:

@@ -35,7 +35,7 @@ def transcribe_with_deepgram(audio_path: Path, word_timestamps: bool = False) ->
             params=params,
             headers=headers,
             content=audio_file.read(),
-            timeout=300,
+            timeout=settings.deepgram_timeout,
         )
 
     if response.status_code >= 400:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import collections
 import threading
 from pathlib import Path
 import shutil
@@ -40,14 +41,18 @@ from transcript_bot.formatting import (
 )
 from transcript_bot.exporters import write_docx, write_text
 from transcript_bot.storage import create_job_paths, ensure_data_dirs
-from transcript_bot.transcription import transcribe_with_diarization
+from transcript_bot.transcription import transcribe_audio_smart
 from transcript_bot.ollama_client import OllamaError, summarize_meeting_with_ollama
 from transcript_bot.line_bot import LineBotError, acknowledgement_for_event, reply_to_line, verify_webhook_signature
 
 # Module-level job tracking for async transcription
 _active_jobs: dict[str, threading.Thread] = {}
 _cancel_flags: dict[str, threading.Event] = {}
-_job_progress: dict[str, dict] = {}  # {job_id: {"step": str, "pct": int}}
+_job_progress: dict[str, dict] = {}  # {job_id: {"step": str, "pct": int, "queued": bool, "position": int}}
+_queued_payloads: dict[str, tuple] = {}  # {job_id: (data_dir, paths, original_filename, cancel_event)}
+_job_queue: "collections.deque[str]" = collections.deque()
+_job_lock = threading.Lock()
+_running_count = 0  # number of currently running transcription threads
 
 
 def create_web_app(data_dir: Path | None = None) -> Flask:
@@ -100,9 +105,6 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
         paths = create_job_paths(app.config["DATA_DIR"], suffix)
         try:
             uploaded_file.save(paths.input_audio)
-            if paths.input_audio.stat().st_size > settings.max_audio_bytes:
-                paths.input_audio.unlink(missing_ok=True)
-                return redirect(url_for("index", error=f"音檔超過 {settings.max_audio_mb} MB 限制。"))
 
             create_meeting(
                 app.config["DATA_DIR"],
@@ -120,16 +122,12 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
             # Set title immediately so the processing card shows the original filename
             update_meeting_metadata(app.config["DATA_DIR"], paths.job_id, Path(original_filename).stem[:160], "")
 
-            # Start async background transcription
+            # Start async background transcription (respects MAX_CONCURRENT_JOBS)
             cancel_event = threading.Event()
             _cancel_flags[paths.job_id] = cancel_event
-            thread = threading.Thread(
-                target=_process_job,
-                args=(app.config["DATA_DIR"], paths, original_filename, cancel_event),
-                daemon=True,
+            _enqueue_or_start(
+                app.config["DATA_DIR"], paths.job_id, paths, original_filename, cancel_event
             )
-            _active_jobs[paths.job_id] = thread
-            thread.start()
 
         except OSError as exc:
             return redirect(url_for("index", error=f"儲存音檔失敗：{exc}"))
@@ -269,6 +267,18 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
         if cancel_flag:
             cancel_flag.set()
 
+        # Drop the job if it is still queued (not yet started) so it never launches
+        if meeting_id in _queued_payloads:
+            with _job_lock:
+                if meeting_id in _queued_payloads:
+                    _queued_payloads.pop(meeting_id, None)
+                    try:
+                        _job_queue.remove(meeting_id)
+                    except ValueError:
+                        pass
+                    _job_progress.pop(meeting_id, None)
+                    _refresh_queue_positions()
+
         _delete_local_meeting_files(app.config["DATA_DIR"], meeting.id)
         if not delete_meeting(app.config["DATA_DIR"], meeting.id, meeting.user_id):
             abort(500)
@@ -323,9 +333,71 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
         prog = _job_progress.get(job_id)
         if not prog:
             return jsonify({"active": False})
-        return jsonify({"active": True, "step": prog["step"], "pct": prog["pct"], "label": prog.get("label", prog["step"])})
+        return jsonify(
+            {
+                "active": True,
+                "queued": prog.get("queued", False),
+                "position": prog.get("position"),
+                "step": prog["step"],
+                "pct": prog["pct"],
+                "label": prog.get("label", prog["step"]),
+            }
+        )
 
     return app
+
+
+def _enqueue_or_start(data_dir: str, job_id: str, paths, original_filename: str, cancel_event: threading.Event) -> None:
+    """Launch the transcription thread immediately if a slot is free, otherwise queue it."""
+    global _running_count
+    with _job_lock:
+        if _running_count < settings.max_concurrent_jobs:
+            _running_count += 1
+            _start_thread(data_dir, job_id, paths, original_filename, cancel_event)
+        else:
+            _job_queue.append(job_id)
+            _queued_payloads[job_id] = (data_dir, job_id, paths, original_filename, cancel_event)
+            _job_progress[job_id] = {
+                "step": "queued",
+                "pct": 0,
+                "label": f"queued (排隊中 · 第 {len(_job_queue)} 位)",
+                "queued": True,
+                "position": len(_job_queue),
+            }
+
+
+def _start_thread(data_dir: str, job_id: str, paths, original_filename: str, cancel_event: threading.Event) -> None:
+    thread = threading.Thread(
+        target=_process_job,
+        args=(data_dir, paths, original_filename, cancel_event),
+        daemon=True,
+    )
+    _active_jobs[job_id] = thread
+    thread.start()
+
+
+def _refresh_queue_positions() -> None:
+    for idx, queued_id in enumerate(_job_queue, start=1):
+        prog = _job_progress.get(queued_id)
+        if prog is not None:
+            prog["position"] = idx
+            prog["label"] = f"queued (排隊中 · 第 {idx} 位)"
+
+
+def _on_job_complete(data_dir: str, _finished_id: str) -> None:
+    """Release this job's slot and start the next queued job, if any."""
+    global _running_count
+    pending = None
+    with _job_lock:
+        _running_count -= 1
+        if _job_queue:
+            queued_id = _job_queue.popleft()
+            pending = _queued_payloads.pop(queued_id, None)
+            if pending is not None:
+                _running_count += 1
+                _refresh_queue_positions()
+    if pending is not None:
+        _start_thread(*pending)
 
 
 def _process_job(data_dir: str, paths, original_filename: str, cancel_event: threading.Event) -> None:
@@ -341,6 +413,16 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         normalize_audio(paths.input_audio, paths.normalized_audio)
         _job_progress[job_id] = {"step": "normalizing", "pct": 25, "label": "normalizing (音檔標準化)"}
 
+        # Reject only after normalization so long, high-bitrate recordings still
+        # get in and are auto-split. The normalized 64kbps ceiling is the real cap.
+        if paths.normalized_audio.stat().st_size > settings.max_audio_bytes:
+            _job_progress[job_id] = {
+                "step": "error",
+                "pct": 25,
+                "label": f"error (音檔過大：超過 {settings.max_audio_mb} MB 標準化上限)",
+            }
+            return
+
         # Get audio duration for percentage calculation
         duration = get_audio_duration(paths.normalized_audio)
 
@@ -349,16 +431,41 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
             return
 
         def _on_transcribe_progress(last_segment_time: float, _unused: float) -> None:
+            nonlocal duration
             if last_segment_time < 0:  # signal: transcription complete
                 _job_progress[job_id] = {"step": "transcribing", "pct": 90, "label": "transcribing (語音辨識)"}
                 return
+            # Chunk-based progress: direct pct in 20 → 90 range.
+            if _unused == -999.0:
+                pct = min(90, max(25, int(last_segment_time)))
+                existing_pct = _job_progress.get(job_id, {}).get("pct", 0)
+                if existing_pct >= pct:
+                    return
+                _job_progress[job_id] = {**_job_progress.get(job_id, {}),
+                                          "step": "transcribing", "pct": pct}
+                return
+            # Time-based progress (single-chunk path).
             if duration > 0:
-                pct = min(90, 25 + int((last_segment_time / duration) * 65))
-                _job_progress[job_id] = {"step": "transcribing", "pct": pct, "label": "transcribing (語音辨識)"}
+                pct = min(90, 20 + int((last_segment_time / duration) * 70))
+                existing_pct = _job_progress.get(job_id, {}).get("pct", 0)
+                if existing_pct >= pct:
+                    return
+                _job_progress[job_id] = {**_job_progress.get(job_id, {}),
+                                          "step": "transcribing", "pct": pct}
 
-        _job_progress[job_id] = {"step": "transcribing", "pct": 25, "label": "transcribing (語音辨識)"}
+        _job_progress[job_id] = {"step": "transcribing", "pct": 20, "label": "transcribing (語音辨識)"}
+
+        def _chunk_label(completed: int, total: int) -> None:
+            prog = _job_progress.get(job_id) or {}
+            prog["label"] = f"transcribing (分段語音辨識 {completed}/{total})"
+            _job_progress[job_id] = prog
+
         segments = normalize_speaker_labels(
-            transcribe_with_diarization(paths.normalized_audio, progress_callback=_on_transcribe_progress)
+            transcribe_audio_smart(
+                paths.normalized_audio,
+                progress_callback=_on_transcribe_progress,
+                chunk_label_callback=_chunk_label,
+            )
         )
 
         # Step 3: Polish & save (90 → 100%)
@@ -381,6 +488,7 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         _active_jobs.pop(job_id, None)
         _cancel_flags.pop(job_id, None)
         _job_progress.pop(job_id, None)
+        _on_job_complete(data_dir, job_id)
 
 
 def _restore_speaker_labels(text: str, aliases: dict[str, str]) -> str:

@@ -82,7 +82,8 @@ def _transcription_payload(audio_url: str) -> dict[str, Any]:
 
 
 def _wait_for_result(job_id: str, headers: dict[str, str]) -> dict[str, Any]:
-    for _ in range(300):
+    # Long recordings can take many minutes; cap at 30 minutes of polling.
+    for _ in range(1800):
         response = httpx.get(f"{_API_URL}/pre-recorded/{job_id}", headers=headers, timeout=60)
         _raise_for_error(response, "讀取轉錄結果")
         payload = response.json()
