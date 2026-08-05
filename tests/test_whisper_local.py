@@ -10,6 +10,13 @@ from transcript_bot.whisper_local import transcribe_with_local_whisper
 
 
 class LocalWhisperTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import faster_whisper  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("faster-whisper not installed")
+
     def test_transcription_uses_traditional_chinese_prompt_and_keeps_timestamps(self) -> None:
         whisper_model = MagicMock()
         whisper_model.transcribe.return_value = (
