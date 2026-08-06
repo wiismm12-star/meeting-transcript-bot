@@ -5,8 +5,14 @@ from unittest.mock import MagicMock, patch
 import unittest
 
 import httpx
+from pathlib import Path
 
-from transcript_bot.ollama_client import OllamaError, _repair_display_text, polish_with_ollama
+from transcript_bot.ollama_client import (
+    OllamaError,
+    _repair_display_text,
+    apply_glossary,
+    polish_with_ollama,
+)
 
 
 class OllamaPolishTests(unittest.TestCase):
@@ -119,6 +125,31 @@ class OllamaPolishTests(unittest.TestCase):
     def test_repairs_utf8_decoded_as_latin1_display_text(self) -> None:
         mojibake_colon = b"\xef\xbc\x9a".decode("latin-1")
         self.assertEqual(_repair_display_text(mojibake_colon), chr(0xFF1A))
+
+    def test_glossary_corrects_known_asr_misreading(self) -> None:
+        # KKBUS is the ASR misreading of the brand KKBOX in the promo clip.
+        with patch("transcript_bot.ollama_client._load_glossary", return_value=[("KKBUS", "KKBOX")]):
+            self.assertEqual(apply_glossary("前往KKBUS風雲榜官網"), "前往KKBOX風雲榜官網")
+
+    def test_glossary_runs_after_model_even_if_model_keeps_misreading(self) -> None:
+        # The model returns the text unchanged (still containing KKBUS); the
+        # post-polish glossary pass must still fix it deterministically.
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"message": {"content": "到KKBUS風雲榜官網搜尋。"}}
+
+        with (
+            patch("transcript_bot.ollama_client.settings", self.settings),
+            patch("transcript_bot.ollama_client._load_glossary", return_value=[("KKBUS", "KKBOX")]),
+            patch("transcript_bot.ollama_client.httpx.post", return_value=response),
+        ):
+            result = polish_with_ollama("Speaker 1: 到KKBUS風雲榜官網搜尋")
+
+        self.assertEqual(result, "Speaker 1：到KKBOX風雲榜官網搜尋。")
+
+    def test_glossary_missing_file_is_safe_noop(self) -> None:
+        missing = SimpleNamespace(glossary_file=Path("/nonexistent/glossary.txt"))
+        with patch("transcript_bot.ollama_client.settings", missing):
+            self.assertEqual(apply_glossary("KKBUS 活動"), "KKBUS 活動")
 
 
 if __name__ == "__main__":

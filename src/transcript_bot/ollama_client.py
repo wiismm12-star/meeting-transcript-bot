@@ -16,15 +16,73 @@ class OllamaError(RuntimeError):
 
 _LABEL_PATTERN = re.compile(r"^(.{1,40}?)[：:]\s*(.+)$")
 _WRAPPER_PATTERN = re.compile(r"^(?:#|---|以下|潤稿|整理後|說明|備註|如需)")
+_GLOSSARY_CACHE: list[tuple[str, str]] | None = None
+_GLOSSARY_MTIME: float | None = None
+
+
+def _load_glossary() -> list[tuple[str, str]]:
+    """Load the Taiwan localization glossary as (wrong, correct) pairs.
+
+    Format: one mapping per line, ``wrong => correct`` or ``wrong->correct``.
+    Lines starting with ``#`` or blank are ignored. Results are cached and
+    refreshed when the file mtime changes, so editing the glossary takes effect
+    on the next polish without a restart. Returns ``[]`` when no glossary is
+    configured or the file is absent, so polishing stays a safe no-op.
+    """
+    global _GLOSSARY_CACHE, _GLOSSARY_MTIME
+    path = getattr(settings, "glossary_file", None)
+    if path is None:
+        return []
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return []
+    if _GLOSSARY_CACHE is not None and _GLOSSARY_MTIME == mtime:
+        return _GLOSSARY_CACHE
+    pairs: list[tuple[str, str]] = []
+    if not path.is_file():
+        _GLOSSARY_CACHE, _GLOSSARY_MTIME = [], mtime
+        return pairs
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        for sep in ("=>", "->", "→"):
+            if sep in line:
+                wrong, correct = line.split(sep, 1)
+                wrong, correct = wrong.strip(), correct.strip()
+                if wrong and correct:
+                    pairs.append((wrong, correct))
+                break
+    _GLOSSARY_CACHE, _GLOSSARY_MTIME = pairs, mtime
+    return pairs
+
+
+def apply_glossary(text: str) -> str:
+    """Deterministically rewrite known ASR misreadings / brand terms in ``text``."""
+    for wrong, correct in _load_glossary():
+        if wrong in text:
+            text = text.replace(wrong, correct)
+    return text
 _SYSTEM_PROMPT = """
-You are a conservative Traditional-Chinese transcript proofreader.
+You are a conservative Traditional-Chinese transcript proofreader for Taiwan (台灣) content.
 Correct only the supplied paragraph: add punctuation, remove unnatural word spacing,
 remove filler words, and correct obvious typos. Every sentence MUST end with appropriate punctuation (。！？). Do not add facts, conclusions, examples,
 or new sentences. Preserve the paragraph whenever possible. Trim only a clearly broken
 prefix or suffix that cannot be made correct without guessing. Output only the revised paragraph,
 with no title, explanation, Markdown, quotation, or speaker label.
-If the supplied text contains garbled or invalid display characters that cannot be
-repaired confidently, output exactly DROP.
+
+Apply Taiwan (台灣) localization conventions:
+- This is Taiwan-context speech. Use Taiwan customary written forms: 捷運 station/line names
+  (e.g. 忠孝復興站, 文湖線, 板南線), 公車 not 巴士, 轉乘 not 轉車, 粉絲/留言 kept as-is (do not
+  convert to China usage like 评论).
+- Spoken dates/numbers → written form: 3月31號 → 3月31日; keep 百大, 年度 etc. as natural.
+- Proper nouns, brand names, and event names (e.g. KKBOX, 風雲榜) MUST be preserved exactly as
+  the canonical name even if the audio sounds slightly different — do NOT transliterate or
+  "fix" them into a different word. A deterministic glossary pass runs after you, so never
+  guess a brand name.
+- If the supplied text contains garbled or invalid display characters that cannot be
+  repaired confidently, output exactly DROP.
 """.strip()
 _SUMMARY_SYSTEM_PROMPT = """
 You are a careful Traditional-Chinese meeting summarizer. Use only facts explicitly
@@ -37,7 +95,14 @@ or outcomes, and do not mention uncertain fragments as facts. Use Traditional Ch
 
 
 def polish_with_ollama(raw_transcript: str) -> str:
-    """Polish each speaker turn independently so labels and turn order cannot be rewritten."""
+    """Polish each speaker turn independently so labels and turn order cannot be rewritten.
+
+    A deterministic glossary pass runs first (so brand/proper nouns survive the
+    model unchanged) and again after (to correct any residual ASR misreading the
+    model left in), guaranteeing terms like KKBUS→KKBOX are fixed regardless of
+    model behaviour.
+    """
+    raw_transcript = apply_glossary(raw_transcript)
     output_lines: list[str] = []
     for raw_line in raw_transcript.splitlines():
         line = raw_line.strip()
@@ -57,7 +122,7 @@ def polish_with_ollama(raw_transcript: str) -> str:
             if revised:
                 output_lines.append(revised)
 
-    return "\n".join(output_lines).strip()
+    return apply_glossary("\n".join(output_lines).strip())
 
 
 def summarize_meeting_with_ollama(raw_transcript: str, fallback_title: str = "") -> dict[str, object]:
@@ -136,7 +201,7 @@ def _polish_paragraph(source: str) -> str:
     cleaned = _clean_model_output(output)
     if not cleaned or _content_similarity(source, cleaned) < 0.35 or _has_invalid_display(cleaned):
         cleaned = source
-    return _trim_unreliable_fragment(cleaned)
+    return apply_glossary(_trim_unreliable_fragment(cleaned))
 
 
 def _clean_model_output(output: str) -> str:

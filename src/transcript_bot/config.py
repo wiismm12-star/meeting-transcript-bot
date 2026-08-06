@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     chunk_min_silence_seconds: float = 0.5
     chunk_max_workers: int = 4
     max_concurrent_jobs: int = 2
+    # 台灣在地化專有名詞對照表（ASR 誤讀糾錯 + 品牌詞保護）。
+    # 檔案不存在時自動跳過，不影響潤稿流程。
+    glossary_file: Path = Path("./data/glossary.txt")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
