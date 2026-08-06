@@ -84,16 +84,41 @@ def apply_pyannote_speakers(segments: list[TranscriptSegment], turns: list[Speak
         raise PyannoteDiarizationError("pyannote 未偵測到可用的語者區段。")
 
     assigned: list[TranscriptSegment] = []
-    for segment in segments:
-        speaker = _speaker_with_greatest_overlap(segment, turns)
-        assigned.append(
-            TranscriptSegment(
-                speaker=speaker or segment.speaker,
-                start=segment.start,
-                end=segment.end,
-                text=segment.text,
+    for turn in turns:
+        # Priority 1: whisper segments whose midpoint falls inside this turn
+        turn_text: list[str] = []
+        for seg in segments:
+            if seg.start is None or seg.end is None:
+                continue
+            midpoint = (seg.start + seg.end) / 2
+            if turn.start <= midpoint < turn.end and seg.text:
+                turn_text.append(seg.text)
+
+        # Priority 2: fallback — take the segment with greatest overlap
+        if not turn_text:
+            best_overlap = 0.0
+            best_text: str | None = None
+            for seg in segments:
+                if seg.start is None or seg.end is None or not seg.text:
+                    continue
+                overlap = max(0.0, min(seg.end, turn.end) - max(seg.start, turn.start))
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_text = seg.text
+            if best_text:
+                turn_text = [best_text]
+
+        if turn_text:
+            assigned.append(
+                TranscriptSegment(
+                    speaker=turn.speaker,
+                    start=turn.start,
+                    end=turn.end,
+                    text=" ".join(turn_text),
+                )
             )
-        )
+
+    assigned.sort(key=lambda s: s.start or 0)
     return assigned
 
 
