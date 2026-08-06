@@ -61,7 +61,10 @@ def transcribe_chunk_with_model(
             task="transcribe",
             beam_size=5,
             vad_filter=True,
-            condition_on_previous_text=False,
+                vad_parameters={
+                    "min_silence_duration_ms": 500,
+                },
+                condition_on_previous_text=False,
             initial_prompt=prompt or None,
         )
         result = []

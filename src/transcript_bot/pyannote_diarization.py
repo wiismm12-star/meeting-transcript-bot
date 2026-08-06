@@ -80,41 +80,48 @@ def _load_audio_for_pyannote(audio_path: Path, torch):
 
 
 def apply_pyannote_speakers(segments: list[TranscriptSegment], turns: list[SpeakerTurn]) -> list[TranscriptSegment]:
+    """Assign each whisper segment to the pyannote speaker with the greatest temporal overlap.
+
+    Every pyannote speaker turn is guaranteed at least one output segment, even if no
+    whisper text maps to it (the segment will carry a ``[手動補入]`` placeholder so the
+    speaker structure is visible in the UI).
+    """
     if not turns:
         raise PyannoteDiarizationError("pyannote 未偵測到可用的語者區段。")
 
     assigned: list[TranscriptSegment] = []
+    for segment in segments:
+        speaker = _speaker_with_greatest_overlap(segment, turns)
+        assigned.append(
+            TranscriptSegment(
+                speaker=speaker or segment.speaker,
+                start=segment.start,
+                end=segment.end,
+                text=segment.text,
+            )
+        )
+
+    # Make sure every pyannote turn is represented — add placeholder segments
+    # for turn intervals that have no assigned whisper segment overlapping them.
+    covered: set[str] = {s.speaker for s in assigned if s.speaker}
     for turn in turns:
-        # Priority 1: whisper segments whose midpoint falls inside this turn
-        turn_text: list[str] = []
-        for seg in segments:
-            if seg.start is None or seg.end is None:
+        if turn.speaker in covered:
+            continue
+        # Check if any assigned segment overlaps this turn at all.
+        overlaps = False
+        for s in assigned:
+            if s.start is None or s.end is None:
                 continue
-            midpoint = (seg.start + seg.end) / 2
-            if turn.start <= midpoint < turn.end and seg.text:
-                turn_text.append(seg.text)
-
-        # Priority 2: fallback — take the segment with greatest overlap
-        if not turn_text:
-            best_overlap = 0.0
-            best_text: str | None = None
-            for seg in segments:
-                if seg.start is None or seg.end is None or not seg.text:
-                    continue
-                overlap = max(0.0, min(seg.end, turn.end) - max(seg.start, turn.start))
-                if overlap > best_overlap:
-                    best_overlap = overlap
-                    best_text = seg.text
-            if best_text:
-                turn_text = [best_text]
-
-        if turn_text:
+            if s.end > turn.start and s.start < turn.end:
+                overlaps = True
+                break
+        if not overlaps:
             assigned.append(
                 TranscriptSegment(
                     speaker=turn.speaker,
                     start=turn.start,
                     end=turn.end,
-                    text=" ".join(turn_text),
+                    text="[手動補入]",
                 )
             )
 
