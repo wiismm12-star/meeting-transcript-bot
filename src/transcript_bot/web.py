@@ -477,6 +477,8 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         transcript_text = polish_transcript(raw_text) if settings.enable_polish else polish_local_transcript(raw_text)
         _job_progress[job_id] = {"step": "saving", "pct": 97, "label": "saving (儲存中)"}
         update_meeting_transcript_text(data_dir, job_id, transcript_text)
+        # Sync polished text back to individual segments so the editor shows punctuation.
+        _sync_polished_segments(data_dir, job_id, transcript_text, segments)
         update_meeting_metadata(data_dir, job_id, Path(original_filename).stem[:160], "")
         summary = _generate_meeting_summary(transcript_text, Path(original_filename).stem[:160])
         update_meeting_summary_text(data_dir, job_id, _serialize_summary(summary))
@@ -499,6 +501,22 @@ def _restore_speaker_labels(text: str, aliases: dict[str, str]) -> str:
         text = text.replace(f"{display_name}：", f"{original_label}：")
         text = text.replace(f"{display_name}:", f"{original_label}：")
     return text
+
+
+def _sync_polished_segments(data_dir: str, meeting_id: str, transcript_text: str, segments: list) -> None:
+    """Parse polished transcript_text back into per-speaker blocks and update DB segments."""
+    import re as _re
+    blocks = _re.split(r"\n\n+", transcript_text)
+    for block in blocks:
+        match = _re.match(r"^(Speaker\s+\d+)[：:]\s*(.+)", block.strip(), _re.IGNORECASE | _re.DOTALL)
+        if not match:
+            continue
+        speaker_label = match.group(1)
+        polished_text = match.group(2).strip()
+        for i, seg in enumerate(segments, start=1):
+            if seg.speaker == speaker_label:
+                update_transcript_segment_text(data_dir, meeting_id, 0, i, polished_text)
+                break
 
 
 def _delete_local_meeting_files(data_dir: Path, meeting_id: str) -> None:
