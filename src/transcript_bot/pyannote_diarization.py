@@ -30,7 +30,7 @@ def diarize_with_pyannote(audio_path: Path) -> list[SpeakerTurn]:
 
     try:
         pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-community-1",
+            settings.pyannote_model,
             token=settings.pyannote_hf_token,
         )
         if torch.cuda.is_available():

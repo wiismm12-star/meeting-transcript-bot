@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     enable_pyannote_diarization: bool = False
     pyannote_hf_token: str = ""
     pyannote_num_speakers: int = 0
+    pyannote_model: str = "pyannote/speaker-diarization-community-1"
     data_dir: Path = Path("./data")
     max_audio_mb: int = 200
     # Long-recording support: split into chunks at silence boundaries and
