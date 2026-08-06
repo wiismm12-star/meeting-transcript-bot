@@ -26,7 +26,7 @@ def load_whisper_model():
         raise LocalWhisperError("尚未安裝本機 Whisper。請執行：uv sync --extra whisper") from exc
 
     device, compute_type = _runtime_options()
-    prompt = settings.whisper_initial_prompt.strip() or settings.deepgram_keyterms.strip()
+    prompt = settings.whisper_initial_prompt.strip()
     model_dir = _model_directory()
     try:
         if not (model_dir / "model.bin").is_file():
