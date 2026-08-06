@@ -19,7 +19,7 @@ _WRAPPER_PATTERN = re.compile(r"^(?:#|---|以下|潤稿|整理後|說明|備註|
 _SYSTEM_PROMPT = """
 You are a conservative Traditional-Chinese transcript proofreader.
 Correct only the supplied paragraph: add punctuation, remove unnatural word spacing,
-remove filler words, and correct obvious typos. Do not add facts, conclusions, examples,
+remove filler words, and correct obvious typos. Every sentence MUST end with appropriate punctuation (。！？). Do not add facts, conclusions, examples,
 or new sentences. Preserve the paragraph whenever possible. Trim only a clearly broken
 prefix or suffix that cannot be made correct without guessing. Output only the revised paragraph,
 with no title, explanation, Markdown, quotation, or speaker label.

@@ -20,6 +20,8 @@ _LEADING_FILLER_PATTERN = re.compile(r"(?<=[:：])\s*(?:呃+|嗯+|啊+|喔+|哦+
 _CJK_TOKEN_SPACE_PATTERN = re.compile(r"(?<=[\u4e00-\u9fff0-9])\s+(?=[\u4e00-\u9fff0-9])")
 _CONFIRMED_ASR_CORRECTIONS = {
     "首扶梯": "手扶梯",
+    "中校復興": "忠孝復興",
+    "中正復興": "忠孝復興",
 }
 _ACTION_KEYWORDS = ("決定", "決議", "確認", "同意", "負責", "完成", "安排", "提交", "回覆", "跟進", "下一步")
 
@@ -191,7 +193,7 @@ def clean_text(text: str) -> str:
     text = re.sub(r"([，。！？、；：]){2,}", r"\1", text)
     text = re.sub(r"\b(\w+)(?:\s+\1\b)+", r"\1", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text)
-    return text.strip(" \t\r\n，。！？、；：")
+    return text.strip(" \t\r\n，、；：")
 
 
 def to_traditional(text: str) -> str:
