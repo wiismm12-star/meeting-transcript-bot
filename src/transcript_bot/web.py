@@ -483,7 +483,9 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         _job_progress[job_id] = {"step": "done", "pct": 100, "label": "done (完成)"}
 
     except Exception:
-        pass  # failed — meeting stays in DB
+        import logging
+        logging.getLogger("transcript_bot.web").exception("轉錄失敗 job=%s", job_id)
+        _job_progress[job_id] = {"step": "error", "pct": 0, "label": "error (轉錄失敗，請重試)"}
     finally:
         _active_jobs.pop(job_id, None)
         _cancel_flags.pop(job_id, None)
