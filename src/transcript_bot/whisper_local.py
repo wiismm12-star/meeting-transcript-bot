@@ -103,9 +103,8 @@ def _model_directory() -> Path:
 def _register_nvidia_dlls() -> None:
     """Make pip-installed NVIDIA CUDA DLLs discoverable on Windows."""
     import os as _os
-    import sys as _sys
-    _venv = Path(_sys.prefix) if hasattr(_sys, "prefix") else Path(__file__).resolve().parents[3]
-    _nv = _venv / "Lib" / "site-packages" / "nvidia"
+    # Resolve from this file's location (same depth as web.py: src/transcript_bot/).
+    _nv = Path(__file__).resolve().parents[2] / ".venv" / "Lib" / "site-packages" / "nvidia"
     for _sub in ("cublas/bin", "cuda_runtime/bin"):
         _p = _nv / _sub
         if _p.is_dir():
