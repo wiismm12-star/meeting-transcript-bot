@@ -10,9 +10,17 @@ from pathlib import Path
 from transcript_bot.ollama_client import (
     OllamaError,
     _repair_display_text,
+    _split_transcript,
     apply_glossary,
     polish_with_ollama,
+    summarize_meeting_with_ollama,
 )
+
+
+def _chat_response(content: str) -> MagicMock:
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"message": {"content": content}}
+    return response
 
 
 class OllamaPolishTests(unittest.TestCase):
@@ -150,6 +158,98 @@ class OllamaPolishTests(unittest.TestCase):
         missing = SimpleNamespace(glossary_file=Path("/nonexistent/glossary.txt"))
         with patch("transcript_bot.ollama_client.settings", missing):
             self.assertEqual(apply_glossary("KKBUS 活動"), "KKBUS 活動")
+
+
+class OllamaSummaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.settings = SimpleNamespace(
+            ollama_base_url="http://127.0.0.1:11434/",
+            ollama_text_model="qwen3:8b",
+        )
+
+    def test_short_transcript_summarized_in_single_call(self) -> None:
+        resp = _chat_response('{"title":"會議","overview":"概述。","highlights":["重點一","重點二"]}')
+        with (
+            patch("transcript_bot.ollama_client.settings", self.settings),
+            patch("transcript_bot.ollama_client.httpx.post", return_value=resp) as post,
+        ):
+            out = summarize_meeting_with_ollama("Speaker 1：簡短內容。", "預設標題")
+        self.assertEqual(out["title"], "會議")
+        self.assertEqual(out["overview"], "概述。")
+        self.assertEqual(out["highlights"], ["重點一", "重點二"])
+        # One call => short path, no map-reduce chunking.
+        self.assertEqual(post.call_count, 1)
+
+    def test_schema_ignore_blob_raises_and_avoids_verbatim_fallback(self) -> None:
+        # qwen3 over a long prompt sometimes echoes the transcript under a
+        # "transcript" key instead of the requested title/overview/highlights.
+        resp = _chat_response('{"transcript":"Speaker 1：一大段逐字稿…"}')
+        with (
+            patch("transcript_bot.ollama_client.settings", self.settings),
+            patch("transcript_bot.ollama_client.httpx.post", return_value=resp),
+        ):
+            with self.assertRaises(OllamaError):
+                summarize_meeting_with_ollama("Speaker 1：一大段逐字稿內容。" * 50)
+
+    def test_long_transcript_uses_map_reduce_then_merge(self) -> None:
+        # Long input must call the chunk summarizer (>=1) AND the merge step,
+        # and must NOT fall back to the verbatim copy-transcript behaviour.
+        chunk_resp = _chat_response('{"highlights":["分段重點A","分段重點B"]}')
+        merge_resp = _chat_response(
+            '{"title":"綜整會議","overview":"整場概述。","highlights":["綜整重點一","綜整重點二","綜整重點三"]}'
+        )
+
+        def _side_effect(*args, **kwargs):
+            system = kwargs["json"]["messages"][0]["content"]
+            if "各段落" in system or "綜整" in system:
+                return merge_resp
+            return chunk_resp
+
+        long_text = "Speaker 1：討論性別平等的重要議題。\n\n" * 400  # well over threshold
+        with (
+            patch("transcript_bot.ollama_client.settings", self.settings),
+            patch("transcript_bot.ollama_client.httpx.post", side_effect=_side_effect) as post,
+        ):
+            out = summarize_meeting_with_ollama(long_text, "預設會議")
+        # At least one chunk call + one merge call.
+        self.assertGreaterEqual(post.call_count, 2)
+        self.assertEqual(out["title"], "綜整會議")
+        self.assertNotIn("Speaker 1", out["highlights"][0])
+
+    def test_merge_failure_degrades_to_chunk_highlights(self) -> None:
+        # If the merge step itself returns a bad payload, the pipeline must still
+        # return the per-chunk highlights rather than falling back to the
+        # verbatim copy-transcript fallback.
+        chunk_resp = _chat_response('{"highlights":["分段重點A","分段重點B"]}')
+        bad_merge = _chat_response('{"transcript":"一大段…"}')
+
+        def _side_effect(*args, **kwargs):
+            system = kwargs["json"]["messages"][0]["content"]
+            if "綜整" in system or "各段落" in system:
+                return bad_merge
+            return chunk_resp
+
+        long_text = "Speaker 1：討論性別平等的重要議題。\n\n" * 400
+        with (
+            patch("transcript_bot.ollama_client.settings", self.settings),
+            patch("transcript_bot.ollama_client.httpx.post", side_effect=_side_effect),
+        ):
+            out = summarize_meeting_with_ollama(long_text, "預設會議")
+        self.assertEqual(out["highlights"], ["分段重點A", "分段重點B"])
+        self.assertEqual(out["title"], "預設會議")
+
+    def test_split_transcript_respects_chunk_size_and_overlap(self) -> None:
+        blocks = ["甲" * 3000, "乙" * 3000, "丙" * 3000, "丁" * 3000]
+        text = "\n\n".join(blocks)
+        chunks = _split_transcript(text, chunk_size=6000, overlap=800)
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            # Each chunk should not be wildly larger than chunk_size + overlap.
+            self.assertLessEqual(len(chunk), 6000 + 800 + 50)
+        # Every block must appear in some chunk.
+        joined = "".join(chunks)
+        for block in blocks:
+            self.assertIn(block, joined)
 
 
 if __name__ == "__main__":

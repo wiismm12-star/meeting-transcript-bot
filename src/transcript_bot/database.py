@@ -53,7 +53,7 @@ def init_database(data_dir: Path) -> None:
                 id TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 source_platform TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
                 audio_file_path TEXT NOT NULL,
                 normalized_audio_path TEXT NOT NULL,
                 transcript_txt_path TEXT NOT NULL,
@@ -81,7 +81,7 @@ def init_database(data_dir: Path) -> None:
                 user_id INTEGER NOT NULL,
                 original_label TEXT NOT NULL,
                 display_name TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(meeting_id, user_id, original_label),
                 FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
@@ -104,6 +104,8 @@ def init_database(data_dir: Path) -> None:
 
 
 def create_meeting(data_dir: Path, meeting: MeetingRecord) -> None:
+    from datetime import datetime
+
     with _connect(data_dir) as conn:
         conn.execute(
             """
@@ -111,17 +113,19 @@ def create_meeting(data_dir: Path, meeting: MeetingRecord) -> None:
                 id,
                 user_id,
                 source_platform,
+                created_at,
                 audio_file_path,
                 normalized_audio_path,
                 transcript_txt_path,
                 transcript_docx_path
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 meeting.id,
                 meeting.user_id,
                 meeting.source_platform,
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 meeting.audio_file_path,
                 meeting.normalized_audio_path,
                 meeting.transcript_txt_path,

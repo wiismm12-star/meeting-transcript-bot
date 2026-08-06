@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     enable_pyannote_diarization: bool = False
     pyannote_hf_token: str = ""
     pyannote_num_speakers: int = 0
+    pyannote_min_speakers: int = 2
+    pyannote_max_speakers: int = 15
     pyannote_model: str = "pyannote/speaker-diarization-community-1"
     data_dir: Path = Path("./data")
     max_audio_mb: int = 200
@@ -88,6 +90,10 @@ class Settings(BaseSettings):
             raise RuntimeError("啟用 pyannote 語者分離時，TRANSCRIBE_PROVIDER 必須設為 deepgram 或 whisper。")
         if self.pyannote_num_speakers < 0:
             raise RuntimeError("PYANNOTE_NUM_SPEAKERS 必須是 0 或正整數。")
+        if self.pyannote_min_speakers < 1:
+            raise RuntimeError("PYANNOTE_MIN_SPEAKERS 必須是正整數。")
+        if self.pyannote_max_speakers < self.pyannote_min_speakers:
+            raise RuntimeError("PYANNOTE_MAX_SPEAKERS 必須大於或等於 PYANNOTE_MIN_SPEAKERS。")
         if self.gladia_num_speakers < 0:
             raise RuntimeError("GLADIA_NUM_SPEAKERS 必須是 0 或正整數。")
         if self.max_concurrent_jobs < 1:

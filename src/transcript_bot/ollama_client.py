@@ -14,6 +14,16 @@ class OllamaError(RuntimeError):
     """An actionable error raised when the local Ollama service is unavailable."""
 
 
+class OllamaSchemaError(OllamaError):
+    """The model returned a JSON payload that ignored the requested schema.
+
+    Unlike a network/timeout failure, a schema-ignore blob (e.g. echoing the
+    transcript under a ``transcript`` key) means the summarizer produced no
+    usable content. Callers must NOT silently degrade this into a verbatim
+    copy of the input — they should surface the failure instead.
+    """
+
+
 _LABEL_PATTERN = re.compile(r"^(.{1,40}?)[：:]\s*(.+)$")
 _WRAPPER_PATTERN = re.compile(r"^(?:#|---|以下|潤稿|整理後|說明|備註|如需)")
 _GLOSSARY_CACHE: list[tuple[str, str]] | None = None
@@ -93,6 +103,30 @@ concise highlights. Do not copy speaker labels, do not invent decisions, names, 
 or outcomes, and do not mention uncertain fragments as facts. Use Traditional Chinese.
 """.strip()
 
+# Map step: summarize ONE chunk of a longer transcript. Keeps the model call small
+# enough for an 8B model to follow the JSON contract reliably.
+_CHUNK_SUMMARY_SYSTEM_PROMPT = """
+你是一名嚴謹的繁體中文會議摘要助手。請僅根據提供的「逐字稿片段」，整理其中確實出現的討論重點。
+只回傳 JSON，格式嚴格為：{"highlights":["...","..."]}
+產出 2-4 條簡潔、客觀的討論重點（每條 1-2 句，使用繁體中文）。
+不得抄寫講者標籤，不得杜撰決議、姓名、日期或結論，不得將不確定的片段當作事實。
+""".strip()
+
+# Reduce step: collapse the per-chunk highlights into the final summary object.
+_MERGE_SUMMARY_SYSTEM_PROMPT = """
+你是一名嚴謹的繁體中文會議摘要助手。下面是一場會議「各段落」的討論重點清單（已按順序整理）。
+請綜整為最終會議摘要，只回傳 JSON，格式嚴格為：{"title":"...","overview":"...","highlights":["...","..."]}
+標題精簡（最多 26 個中文字）；overview 用 1-2 句概括整場會議；highlights 產出 3-5 條去重、不重疊的關鍵重點（使用繁體中文）。
+只能使用清單中確實出現的內容，不得杜撰決議、姓名、日期或結論。
+""".strip()
+
+# Above this many characters, summarize via map-reduce (chunked) instead of one
+# giant prompt. Empirically qwen3:8b stops honouring the JSON schema past ~8K-10K
+# Chinese characters and returns a verbatim ``{"transcript": "..."}`` blob.
+_SUMMARY_CHUNK_THRESHOLD = 8000
+_SUMMARY_CHUNK_SIZE = 6000
+_SUMMARY_CHUNK_OVERLAP = 800
+
 
 def polish_with_ollama(raw_transcript: str) -> str:
     """Polish each speaker turn independently so labels and turn order cannot be rewritten.
@@ -126,22 +160,105 @@ def polish_with_ollama(raw_transcript: str) -> str:
 
 
 def summarize_meeting_with_ollama(raw_transcript: str, fallback_title: str = "") -> dict[str, object]:
-    """Return a structured, evidence-only summary from the local Ollama model."""
+    """Return a structured, evidence-only summary from the local Ollama model.
+
+    Short transcripts are summarized in a single call. Long transcripts (above
+    ``_SUMMARY_CHUNK_THRESHOLD`` characters) are summarized via map-reduce: each
+    chunk is compressed into a few highlights, then those are merged into the
+    final title/overview/highlights. This keeps every model call small enough for
+    an 8B local model to honour the JSON schema reliably.
+    """
+    transcript = (raw_transcript or "").strip()
+    if len(transcript) <= _SUMMARY_CHUNK_THRESHOLD:
+        return _summarize_single(transcript, fallback_title)
+
+    chunks = _split_transcript(transcript, _SUMMARY_CHUNK_SIZE, _SUMMARY_CHUNK_OVERLAP)
+    partial_highlights: list[str] = []
+    for chunk in chunks:
+        try:
+            chunk_payload = _ollama_chat_json(
+                _CHUNK_SUMMARY_SYSTEM_PROMPT,
+                chunk,
+                timeout=120.0,
+            )
+        except OllamaSchemaError:
+            # The model ignored the schema (e.g. echoed the transcript). That is
+            # a real failure, not a transient glitch — never degrade it into a
+            # verbatim copy of the input. Surface it so the caller falls back
+            # honestly instead of showing a fake "summary".
+            raise
+        except OllamaError:
+            # A transient failure (network/timeout/empty) on one chunk must not
+            # sink the whole meeting. Fall back to a verbatim-trim of the chunk
+            # so the reduce step still has material.
+            chunk_payload = {"highlights": [_shorten_for_merge(chunk)]}
+        for item in chunk_payload.get("highlights", []) or []:
+            text = str(item).strip()
+            if text and text not in partial_highlights:
+                partial_highlights.append(text)
+    if not partial_highlights:
+        raise OllamaError("本機 Ollama 未產生足夠的摘要內容。")
+
+    try:
+        merged = _ollama_chat_json(
+            _MERGE_SUMMARY_SYSTEM_PROMPT,
+            "會議各段落討論重點如下：\n" + "\n".join(f"{i}. {h}" for i, h in enumerate(partial_highlights, 1)),
+            timeout=180.0,
+        )
+    except OllamaError:
+        # Merge step failed — degrade gracefully to the raw chunk highlights so
+        # the meeting still gets a real (if un-polished) summary, never the
+        # verbatim copy-transcript fallback.
+        return {"title": fallback_title or "會議重點摘要", "overview": "以下為根據本次逐字稿整理的重點。", "highlights": partial_highlights[:5]}
+
+    title = str(merged.get("title", "")).strip()[:80]
+    overview = str(merged.get("overview", "")).strip()
+    raw_highlights = merged.get("highlights", []) or partial_highlights
+    highlights = [str(item).strip() for item in raw_highlights if str(item).strip()]
+    if not overview or not highlights:
+        # Reduce step under-delivered — degrade gracefully to the raw chunk list.
+        overview = overview or "以下為根據本次逐字稿整理的重點。"
+        highlights = partial_highlights
+    return {"title": title or fallback_title or "會議重點摘要", "overview": overview, "highlights": highlights[:5]}
+
+
+def _summarize_single(transcript: str, fallback_title: str) -> dict[str, object]:
+    """Single-call summary for short transcripts."""
+    payload = _ollama_chat_json(
+        _SUMMARY_SYSTEM_PROMPT,
+        transcript,
+        timeout=180.0,
+    )
+    title = str(payload.get("title", "")).strip()[:80]
+    overview = str(payload.get("overview", "")).strip()
+    raw_highlights = payload.get("highlights", [])
+    highlights = [str(item).strip() for item in raw_highlights if str(item).strip()] if isinstance(raw_highlights, list) else []
+    if not overview or not highlights:
+        raise OllamaError("本機 Ollama 未產生足夠的摘要內容。")
+    return {"title": title or fallback_title or "會議重點摘要", "overview": overview, "highlights": highlights[:5]}
+
+
+def _ollama_chat_json(system_prompt: str, user_content: str, timeout: float) -> dict:
+    """Post a chat request to Ollama and parse the JSON response.
+
+    Raises :class:`OllamaError` on network failure, non-200, unparseable JSON,
+    or a ``{"transcript": ...}``-style blob where the model ignored the schema.
+    """
     try:
         response = httpx.post(
             f"{settings.ollama_base_url.rstrip('/')}/api/chat",
             json={
                 "model": settings.ollama_text_model,
                 "messages": [
-                    {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
-                    {"role": "user", "content": raw_transcript},
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
                 ],
                 "stream": False,
                 "think": False,
                 "format": "json",
                 "options": {"temperature": 0.1},
             },
-            timeout=180.0,
+            timeout=timeout,
         )
     except httpx.RequestError as exc:
         raise OllamaError("找不到本機 Ollama 服務，無法產生會議摘要。") from exc
@@ -156,13 +273,54 @@ def summarize_meeting_with_ollama(raw_transcript: str, fallback_title: str = "")
     except json.JSONDecodeError as exc:
         raise OllamaError("本機 Ollama 回傳的摘要格式無法讀取。") from exc
 
-    title = str(payload.get("title", "")).strip()[:80]
-    overview = str(payload.get("overview", "")).strip()
-    raw_highlights = payload.get("highlights", [])
-    highlights = [str(item).strip() for item in raw_highlights if str(item).strip()] if isinstance(raw_highlights, list) else []
-    if not overview or not highlights:
-        raise OllamaError("本機 Ollama 未產生足夠的摘要內容。")
-    return {"title": title or fallback_title or "會議重點摘要", "overview": overview, "highlights": highlights[:5]}
+    if not isinstance(payload, dict):
+        raise OllamaError("本機 Ollama 回傳的摘要格式無法讀取。")
+    # Guard against the schema-ignore blob: qwen3 sometimes echoes the transcript
+    # under a "transcript" key and omits the requested fields. This is a schema
+    # failure, not a transient error, so callers must surface it (never degrade
+    # to a verbatim copy of the input).
+    if "transcript" in payload and not any(k in payload for k in ("title", "overview", "highlights")):
+        raise OllamaSchemaError("本機 Ollama 未依格式回傳摘要內容。")
+    return payload
+
+
+def _split_transcript(text: str, chunk_size: int, overlap: int) -> list[str]:
+    """Split a transcript into overlapping chunks of ~``chunk_size`` characters.
+
+    Splits on blank lines (speaker-turn boundaries) when possible so a chunk does
+    not cut a turn mid-sentence; falls back to a hard character cut otherwise.
+    """
+    if len(text) <= chunk_size:
+        return [text]
+    # Prefer paragraph (blank-line) boundaries.
+    blocks = [b for b in re.split(r"\n\s*\n", text) if b.strip()]
+    if not blocks:
+        blocks = [text]
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for block in blocks:
+        block_len = len(block)
+        if current and current_len + block_len + 2 > chunk_size:
+            chunks.append("\n\n".join(current).strip())
+            # Carry overlap from the tail of the previous chunk.
+            overlap_blocks = current[-1:] if overlap < current_len else current
+            current = list(overlap_blocks)
+            current_len = sum(len(b) + 2 for b in current)
+        current.append(block)
+        current_len += block_len + 2
+    if current:
+        chunks.append("\n\n".join(current).strip())
+    return [c for c in chunks if c]
+
+
+def _shorten_for_merge(text: str, limit: int = 120) -> str:
+    """Trim a verbatim chunk to a single readable highlight when a chunk call fails."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    end = max(text.rfind(m, 0, limit) for m in "。！？；")
+    return text[: end + 1 if end > 20 else limit].rstrip("，、；") + "…"
 
 
 def _polish_paragraph(source: str) -> str:

@@ -45,6 +45,11 @@ def diarize_with_pyannote(audio_path: Path) -> list[SpeakerTurn]:
         options: dict[str, int] = {}
         if settings.pyannote_num_speakers:
             options["num_speakers"] = settings.pyannote_num_speakers
+        else:
+            # Auto mode with range: let pyannote's clustering pick the optimal
+            # number within a generous window instead of hardcoding per-meeting.
+            options["min_speakers"] = settings.pyannote_min_speakers
+            options["max_speakers"] = settings.pyannote_max_speakers
         result = pipeline(_load_audio_for_pyannote(audio_path, torch), **options)
         diarization = getattr(result, "exclusive_speaker_diarization", result.speaker_diarization)
         return [
