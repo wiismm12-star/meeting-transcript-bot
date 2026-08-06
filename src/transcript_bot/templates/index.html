@@ -37,8 +37,8 @@
     {% endif %}
 
     {# ── 最近會議 ── #}
-    <div class="meeting-list-heading"><div><p class="eyebrow">YOUR RECORDINGS</p><h2>最近會議 <span>{{ done_meetings|length }}</span></h2></div><div class="meeting-list-actions"><label class="select-all"><input id="select-all-meetings" type="checkbox"> 全選</label><span id="selected-count" class="meta">尚未選取</span><button id="delete-selected" class="danger-button" type="button">刪除已選會議</button></div></div>
     {% if done_meetings %}
+    <div class="meeting-list-heading"><div><p class="eyebrow">YOUR RECORDINGS</p><h2>最近會議 <span>{{ done_meetings|length }}</span></h2></div><div class="meeting-list-actions"><label class="select-all"><input id="select-all-meetings" type="checkbox"> 全選</label><span id="selected-count" class="meta">尚未選取</span><button id="delete-selected" class="danger-button" type="button">刪除已選會議</button></div></div>
       <form id="bulk-delete-form" method="post" action="{{ url_for('delete_selected_local_meetings') }}">
         {% for meeting in done_meetings %}
           <section class="card meeting-list-card" data-href="{{ url_for('edit_meeting', meeting_id=meeting.id) }}" role="link" tabindex="0" aria-label="開啟 {{ meeting.title or meeting.created_at[:16] }} 工作台">
