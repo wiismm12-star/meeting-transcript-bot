@@ -570,8 +570,8 @@ def _register_nvidia_dlls() -> None:
 
     ctranslate2 (faster-whisper's backend) needs cuBLAS at runtime when
     ``WHISPER_DEVICE=cuda``.  The ``nvidia-cublas-cu12`` wheel ships the DLLs
-    under ``site-packages/nvidia/cublas/bin`` — Python won't find them without
-    ``os.add_dll_directory()`` on Windows.
+    under ``site-packages/nvidia/cublas/bin`` — ``os.add_dll_directory`` alone
+    is not enough for CT2's lazy loading; we also prepend to ``PATH``.
     """
     import os as _os
     _nvidia_root = Path(__file__).resolve().parents[2] / ".venv" / "Lib" / "site-packages" / "nvidia"
@@ -579,6 +579,7 @@ def _register_nvidia_dlls() -> None:
         _candidate = _nvidia_root / _sub
         if _candidate.is_dir():
             _os.add_dll_directory(str(_candidate))
+            _os.environ["PATH"] = str(_candidate) + _os.pathsep + _os.environ.get("PATH", "")
 
 
 if __name__ == "__main__":

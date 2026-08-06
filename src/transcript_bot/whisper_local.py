@@ -101,11 +101,15 @@ def _model_directory() -> Path:
 
 
 def _register_nvidia_dlls() -> None:
-    """Make pip-installed NVIDIA CUDA DLLs discoverable on Windows."""
+    """Make pip-installed NVIDIA CUDA DLLs discoverable on Windows.
+
+    ``os.add_dll_directory`` alone is not enough for ctranslate2's lazy CUDA
+    loading — we prepend the directory to ``PATH`` so any DLL lookup can succeed.
+    """
     import os as _os
-    # Resolve from this file's location (same depth as web.py: src/transcript_bot/).
     _nv = Path(__file__).resolve().parents[2] / ".venv" / "Lib" / "site-packages" / "nvidia"
     for _sub in ("cublas/bin", "cuda_runtime/bin"):
         _p = _nv / _sub
         if _p.is_dir():
             _os.add_dll_directory(str(_p))
+            _os.environ["PATH"] = str(_p) + _os.pathsep + _os.environ.get("PATH", "")
