@@ -224,6 +224,33 @@ ENABLE_EMAIL_DELIVERY=true
 
 在這台電腦開啟 [http://127.0.0.1:8765](http://127.0.0.1:8765)。介面只綁定 loopback 位址，無法從同一網路的其他裝置連入。
 
+> ⚠️ **改完 `src/transcript_bot/*.py` 後必須重啟伺服器。** 本機 Web 以 `debug=False` 執行，編輯原始碼**不會**熱重載。若直接把音檔丟到仍在跑的舊程序上，執行的會是舊程式碼（例如潤稿規則沒生效）。重啟步驟：
+>
+> ```powershell
+> # 1. 關閉佔用 8765 的舊程序
+> Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*transcript_bot.web*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+> # 2. 清除 Python 位元組碼快取（避免載入到舊 .pyc）
+> find src -name "__pycache__" -type d -exec rm -rf {} + 2>$null
+> # 3. 重新啟動
+> .\.venv\Scripts\python.exe -m transcript_bot.web
+> ```
+>
+> 重啟前可用 `netstat -ano | findstr :8765` 取得 PID，再用 `Get-CimInstance Win32_Process -Filter "ProcessId=<PID>" | Select-Object CreationDate` 確認其啟動時間是否早於你的修改時間——若較早，就是「跑在舊程式碼上」。
+
+### 台灣在地化潤稿（專有名詞對照表）
+
+潤稿除了本機 Ollama 的在地化 prompt，還有一份**確定性對照表** `data/glossary.txt`，強制糾正 ASR 誤讀的專有名詞 / 品牌詞（例如 `KKBUS → KKBOX`），不依賴模型判斷。格式為每行一組，使用 `=>`、`->` 或 `→` 分隔，以 `#` 開頭為註解：
+
+```text
+# 錯誤寫法 => 正確寫法
+KKBUS => KKBOX
+KK BUS => KKBOX
+```
+
+- 對照表在潤稿「前」與「後」各套用一次：既保護專有名詞不被模型改壞，也糾正模型殘留的誤讀。
+- **編輯後下一次轉錄自動生效，不必重啟伺服器**（程式依檔案 mtime 重新載入）。
+- 檔案不存在時自動跳過，不影響潤稿。
+
 ### 上傳與轉錄
 
 首頁可直接**點選或拖放** `m4a`、`mp3`、`wav`、`ogg`、`webm`、`mp4` 或 `aac` 錄音檔，系統會在本機背景轉錄，**不阻塞網頁操作**。轉錄中會顯示即時進度條與階段標籤（如「transcribing (語音辨識) 42%」），完成後自動刷新會議清單。
