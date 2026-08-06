@@ -142,5 +142,70 @@ class SmartTranscribeMergeTests(unittest.TestCase):
             self.assertTrue(seg.start is not None and 0.0 <= seg.start <= duration)
 
 
+class ChunkedDiarizationTests(unittest.TestCase):
+    """The chunked path must diarize ONCE over the whole recording.
+
+    Regression guard: chunked transcription used to skip pyannote entirely, so a
+    long multi-speaker meeting came back as a single ``Speaker 1``.
+    """
+
+    def _run(self, diarize_mock, enable=True):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            normalized = Path(temp_dir) / "normalized.mp3"
+            normalized.write_bytes(b"audio")
+            with (
+                patch("transcript_bot.audio.get_audio_duration", return_value=1300.0),
+                patch("transcript_bot.audio._detect_silences", return_value=[]),
+                patch("transcript_bot.audio._extract_span"),
+                patch("transcript_bot.whisper_local.load_whisper_model", return_value=MagicMock()),
+                patch(
+                    "transcript_bot.whisper_local.transcribe_chunk_with_model",
+                    side_effect=lambda model, audio_path, progress_callback=None: [
+                        TranscriptSegment("UNASSIGNED", 2.0, 5.0, "內容"),
+                    ],
+                ),
+                patch("transcript_bot.config.settings.enable_pyannote_diarization", enable),
+                patch("transcript_bot.config.settings.transcribe_provider", "whisper"),
+                patch(
+                    "transcript_bot.pyannote_diarization.diarize_with_pyannote",
+                    diarize_mock,
+                ),
+            ):
+                return transcribe_audio_smart(normalized), normalized
+
+    def test_diarization_runs_once_on_the_full_recording(self) -> None:
+        from transcript_bot.pyannote_diarization import SpeakerTurn
+
+        turns = [
+            SpeakerTurn(start=0.0, end=650.0, speaker="SPEAKER_00"),
+            SpeakerTurn(start=650.0, end=1300.0, speaker="SPEAKER_01"),
+        ]
+        diarize = MagicMock(return_value=turns)
+        segments, normalized = self._run(diarize)
+
+        # Called exactly once, and on the WHOLE file — never per chunk.
+        diarize.assert_called_once()
+        self.assertEqual(diarize.call_args[0][0], normalized)
+        # Speakers actually landed on the segments.
+        speakers = {s.speaker for s in segments}
+        self.assertNotEqual(speakers, {"UNASSIGNED"})
+        self.assertTrue(speakers & {"SPEAKER_00", "SPEAKER_01"})
+
+    def test_diarization_failure_keeps_the_transcription(self) -> None:
+        from transcript_bot.pyannote_diarization import PyannoteDiarizationError
+
+        diarize = MagicMock(side_effect=PyannoteDiarizationError("boom"))
+        segments, _ = self._run(diarize)
+        # Expensive transcription is preserved, just without speaker labels.
+        self.assertGreater(len(segments), 1)
+        self.assertEqual({s.speaker for s in segments}, {"UNASSIGNED"})
+
+    def test_diarization_skipped_when_disabled(self) -> None:
+        diarize = MagicMock()
+        segments, _ = self._run(diarize, enable=False)
+        diarize.assert_not_called()
+        self.assertGreater(len(segments), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

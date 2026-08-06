@@ -460,11 +460,16 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
             prog["label"] = f"transcribing (分段語音辨識 {completed}/{total})"
             _job_progress[job_id] = prog
 
+        def _stage_label(label: str) -> None:
+            _job_progress[job_id] = {**_job_progress.get(job_id, {}),
+                                      "step": "transcribing", "label": label}
+
         segments = normalize_speaker_labels(
             transcribe_audio_smart(
                 paths.normalized_audio,
                 progress_callback=_on_transcribe_progress,
                 chunk_label_callback=_chunk_label,
+                stage_callback=_stage_label,
             )
         )
 

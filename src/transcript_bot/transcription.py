@@ -20,7 +20,12 @@ class TranscriptSegment:
     text: str
 
 
-def transcribe_audio_smart(audio_path: Path, progress_callback=None, chunk_label_callback=None) -> list[TranscriptSegment]:
+def transcribe_audio_smart(
+    audio_path: Path,
+    progress_callback=None,
+    chunk_label_callback=None,
+    stage_callback=None,
+) -> list[TranscriptSegment]:
     """Transcribe a recording, splitting long files into chunks for parallel work.
 
     Short recordings (<= chunk_max_seconds) go through the single-file path
@@ -29,6 +34,13 @@ def transcribe_audio_smart(audio_path: Path, progress_callback=None, chunk_label
     single transcript and a single meeting record.
     ``chunk_label_callback(completed, total)`` is invoked each time a chunk
     finishes so the UI can display e.g. ``分段語音辨識 (5/12)``.
+    ``stage_callback(label)`` reports coarse pipeline stages (e.g. diarization)
+    that are not chunk-scoped.
+
+    Speaker diarization for the chunked path runs ONCE over the whole recording
+    (see ``_apply_global_diarization``), never per chunk: pyannote's
+    ``SPEAKER_xx`` ids are only meaningful within a single run, so per-chunk
+    diarization would turn one real speaker into one fake speaker per chunk.
     """
     chunks = split_audio_at_silence(audio_path, audio_path.parent / "chunks")
     if len(chunks) == 1:
@@ -39,21 +51,54 @@ def transcribe_audio_smart(audio_path: Path, progress_callback=None, chunk_label
         from transcript_bot.whisper_local import load_whisper_model
 
         model = load_whisper_model()
-        return _transcribe_chunks_parallel(
+        merged = _transcribe_chunks_parallel(
             chunks,
             lambda chunk, cb: _transcribe_whisper_chunk(model, chunk, cb),
             provider,
             progress_callback=progress_callback,
             chunk_label_callback=chunk_label_callback,
         )
+    else:
+        merged = _transcribe_chunks_parallel(
+            chunks,
+            lambda chunk, cb: _transcribe_cloud_chunk(chunk, cb),
+            provider,
+            progress_callback=progress_callback,
+            chunk_label_callback=chunk_label_callback,
+        )
 
-    return _transcribe_chunks_parallel(
-        chunks,
-        lambda chunk, cb: _transcribe_cloud_chunk(chunk, cb),
-        provider,
-        progress_callback=progress_callback,
-        chunk_label_callback=chunk_label_callback,
-    )
+    return _apply_global_diarization(audio_path, merged, stage_callback=stage_callback)
+
+
+def _apply_global_diarization(
+    audio_path: Path, segments: list[TranscriptSegment], stage_callback=None
+) -> list[TranscriptSegment]:
+    """Run pyannote once over the full recording and label the merged segments.
+
+    Chunked transcription produces globally-offset timestamps but no speakers,
+    so diarization has to happen after the merge, against the original audio.
+    A diarization failure must not discard an expensive transcription — on error
+    the un-diarized segments are returned and the problem is logged.
+    """
+    if not settings.enable_pyannote_diarization:
+        return segments
+    if settings.transcribe_provider not in {"deepgram", "whisper"}:
+        return segments
+
+    import logging
+
+    from transcript_bot.pyannote_diarization import apply_pyannote_speakers, diarize_with_pyannote
+
+    if stage_callback is not None:
+        stage_callback("diarizing (語者分離)")
+    try:
+        turns = diarize_with_pyannote(audio_path)
+        return apply_pyannote_speakers(segments, turns)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception(
+            "pyannote 語者分離失敗，改以未分離逐字稿輸出 audio=%s", audio_path
+        )
+        return segments
 
 
 def _transcribe_whisper_chunk(model, chunk, progress_callback=None):
@@ -63,7 +108,10 @@ def _transcribe_whisper_chunk(model, chunk, progress_callback=None):
 
 
 def _transcribe_cloud_chunk(chunk, progress_callback=None) -> list[TranscriptSegment]:
-    return transcribe_with_diarization(chunk.audio_path, progress_callback=progress_callback)
+    # Diarization is applied globally after the merge, so skip it per chunk.
+    return transcribe_with_diarization(
+        chunk.audio_path, progress_callback=progress_callback, use_pyannote=False
+    )
 
 
 def _transcribe_chunks_parallel(chunks, transcribe_fn, provider, progress_callback=None, chunk_label_callback=None) -> list[TranscriptSegment]:
@@ -186,11 +234,21 @@ def _chunk_speaker_label(chunk_index: int, raw_speaker: str) -> str:
     return raw_speaker
 
 
-def transcribe_with_diarization(audio_path: Path, progress_callback=None) -> list[TranscriptSegment]:
+def transcribe_with_diarization(
+    audio_path: Path, progress_callback=None, use_pyannote: bool | None = None
+) -> list[TranscriptSegment]:
+    """Transcribe one audio file, optionally applying pyannote diarization.
+
+    ``use_pyannote=False`` forces diarization off for this call — used by the
+    chunked path, which diarizes once over the whole recording after merging.
+    """
+    if use_pyannote is None:
+        use_pyannote = settings.enable_pyannote_diarization
+
     if settings.transcribe_provider == "deepgram":
         from transcript_bot.deepgram import transcribe_with_deepgram
 
-        if settings.enable_pyannote_diarization:
+        if use_pyannote:
             from transcript_bot.pyannote_diarization import apply_pyannote_speakers, diarize_with_pyannote
 
             transcript_segments = transcribe_with_deepgram(audio_path, word_timestamps=True)
@@ -206,7 +264,7 @@ def transcribe_with_diarization(audio_path: Path, progress_callback=None) -> lis
         from transcript_bot.whisper_local import transcribe_with_local_whisper
 
         transcript_segments = transcribe_with_local_whisper(audio_path, progress_callback=progress_callback)
-        if settings.enable_pyannote_diarization:
+        if use_pyannote:
             from transcript_bot.pyannote_diarization import apply_pyannote_speakers, diarize_with_pyannote
 
             return apply_pyannote_speakers(transcript_segments, diarize_with_pyannote(audio_path))
