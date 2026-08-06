@@ -580,29 +580,21 @@ def _deserialize_summary(value: str) -> MeetingSummary | None:
 
 
 def main() -> None:
-    # Register bundled NVIDIA CUDA DLLs so ctranslate2 can find them on GPU.
-    _register_nvidia_dlls()
+    # Register bundled NVIDIA CUDA DLLs so ctranslate2/pyannote can find them on GPU.
+    from transcript_bot.cuda_dlls import register_nvidia_dlls
+
+    register_nvidia_dlls()
     app = create_web_app()
     app.jinja_env.auto_reload = True  # reload templates on every request in dev
     # Loopback binding is deliberate: this MVP must not be exposed to a network.
     app.run(host="127.0.0.1", port=8765, debug=False)
 
 
-def _register_nvidia_dlls() -> None:
-    """Add pip-installed NVIDIA CUDA library directories to the DLL search path.
+def _register_nvidia_dlls() -> None:  # pragma: no cover - thin alias
+    """Backwards-compatible alias. Real logic lives in ``transcript_bot.cuda_dlls``."""
+    from transcript_bot.cuda_dlls import register_nvidia_dlls
 
-    ctranslate2 (faster-whisper's backend) needs cuBLAS at runtime when
-    ``WHISPER_DEVICE=cuda``.  The ``nvidia-cublas-cu12`` wheel ships the DLLs
-    under ``site-packages/nvidia/cublas/bin`` — ``os.add_dll_directory`` alone
-    is not enough for CT2's lazy loading; we also prepend to ``PATH``.
-    """
-    import os as _os
-    _nvidia_root = Path(__file__).resolve().parents[2] / ".venv" / "Lib" / "site-packages" / "nvidia"
-    for _sub in ("cublas/bin", "cuda_runtime/bin"):
-        _candidate = _nvidia_root / _sub
-        if _candidate.is_dir():
-            _os.add_dll_directory(str(_candidate))
-            _os.environ["PATH"] = str(_candidate) + _os.pathsep + _os.environ.get("PATH", "")
+    register_nvidia_dlls()
 
 
 if __name__ == "__main__":

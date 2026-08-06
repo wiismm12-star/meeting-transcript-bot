@@ -20,6 +20,12 @@ class SpeakerTurn:
 
 
 def diarize_with_pyannote(audio_path: Path) -> list[SpeakerTurn]:
+    # MUST run before importing torch/pyannote: registers the CUDA DLLs so
+    # torch.cuda.is_available() is True and diarization uses the GPU instead of
+    # silently falling back to the CPU (which stalls on long recordings).
+    from transcript_bot.cuda_dlls import register_nvidia_dlls
+
+    register_nvidia_dlls()
     try:
         import torch
         from pyannote.audio import Pipeline

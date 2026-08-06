@@ -36,6 +36,7 @@ class SplitAudioTests(unittest.TestCase):
             duration = 1900.0
             with (
                 patch("transcript_bot.audio.get_audio_duration", return_value=duration),
+                patch("transcript_bot.config.settings.chunk_max_seconds", 600),
                 patch(
                     "transcript_bot.audio._detect_silences",
                     return_value=[(598.0, 602.0), (1198.0, 1202.0), (1798.0, 1802.0)],
@@ -61,6 +62,7 @@ class SplitAudioTests(unittest.TestCase):
             normalized.write_bytes(b"audio")
             with (
                 patch("transcript_bot.audio.get_audio_duration", return_value=1300.0),
+                patch("transcript_bot.config.settings.chunk_max_seconds", 600),
                 patch("transcript_bot.audio._detect_silences", return_value=[]),
                 patch("transcript_bot.audio._extract_span"),
             ):
@@ -119,6 +121,7 @@ class SmartTranscribeMergeTests(unittest.TestCase):
             duration = 1300.0
             with (
                 patch("transcript_bot.audio.get_audio_duration", return_value=duration),
+                patch("transcript_bot.config.settings.chunk_max_seconds", 600),
                 patch("transcript_bot.audio._detect_silences", return_value=[]),
                 patch("transcript_bot.audio._extract_span"),
                 patch("transcript_bot.whisper_local.load_whisper_model", return_value=MagicMock()),
@@ -130,6 +133,9 @@ class SmartTranscribeMergeTests(unittest.TestCase):
                         TranscriptSegment("UNASSIGNED", 2.0, 5.0, f"內容@{audio_path}"),
                     ],
                 ),
+                # Diarization is exercised in ChunkedDiarizationTests; this test
+                # only cares about chunk merge ordering, so stub it out.
+                patch("transcript_bot.pyannote_diarization.diarize_with_pyannote", return_value=[]),
             ):
                 segments = transcribe_audio_smart(normalized)
 
@@ -155,6 +161,7 @@ class ChunkedDiarizationTests(unittest.TestCase):
             normalized.write_bytes(b"audio")
             with (
                 patch("transcript_bot.audio.get_audio_duration", return_value=1300.0),
+                patch("transcript_bot.config.settings.chunk_max_seconds", 600),
                 patch("transcript_bot.audio._detect_silences", return_value=[]),
                 patch("transcript_bot.audio._extract_span"),
                 patch("transcript_bot.whisper_local.load_whisper_model", return_value=MagicMock()),

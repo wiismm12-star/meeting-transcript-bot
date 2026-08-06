@@ -18,7 +18,9 @@ def load_whisper_model():
     Returns the loaded ``WhisperModel``. Raises ``LocalWhisperError`` if the
     optional dependency or model is unavailable.
     """
-    _register_nvidia_dlls()
+    from transcript_bot.cuda_dlls import register_nvidia_dlls
+
+    register_nvidia_dlls()
     try:
         from faster_whisper import WhisperModel
         from faster_whisper.utils import download_model
@@ -103,16 +105,10 @@ def _model_directory() -> Path:
     return settings.whisper_model_dir / safe_name
 
 
-def _register_nvidia_dlls() -> None:
-    """Make pip-installed NVIDIA CUDA DLLs discoverable on Windows.
+# Re-exported for backwards compatibility with any caller that imported the
+# underscore-prefixed helper directly. The real implementation now lives in
+# ``transcript_bot.cuda_dlls`` so pyannote can share it.
+def _register_nvidia_dlls() -> None:  # pragma: no cover - thin alias
+    from transcript_bot.cuda_dlls import register_nvidia_dlls
 
-    ``os.add_dll_directory`` alone is not enough for ctranslate2's lazy CUDA
-    loading — we prepend the directory to ``PATH`` so any DLL lookup can succeed.
-    """
-    import os as _os
-    _nv = Path(__file__).resolve().parents[2] / ".venv" / "Lib" / "site-packages" / "nvidia"
-    for _sub in ("cublas/bin", "cuda_runtime/bin"):
-        _p = _nv / _sub
-        if _p.is_dir():
-            _os.add_dll_directory(str(_p))
-            _os.environ["PATH"] = str(_p) + _os.pathsep + _os.environ.get("PATH", "")
+    register_nvidia_dlls()
