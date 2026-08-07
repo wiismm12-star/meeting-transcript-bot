@@ -639,7 +639,35 @@ def _deserialize_summary(value: str) -> MeetingSummary | None:
     return MeetingSummary(title, overview, highlights)
 
 
+def _kill_stale_servers() -> None:
+    """Kill leftover processes already bound to port 8765 so we can start clean."""
+    import os as _os
+    import subprocess as _sp
+
+    current_pid = _os.getpid()
+    try:
+        result = _sp.run(
+            ["netstat", "-ano"], capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            if ":8765" in line and "LISTENING" in line:
+                parts = line.strip().split()
+                try:
+                    pid = int(parts[-1])
+                except ValueError:
+                    continue
+                if pid == current_pid:
+                    continue
+                _sp.run(
+                    ["taskkill", "//F", "//PID", str(pid)],
+                    capture_output=True, timeout=5,
+                )
+    except Exception:
+        pass
+
+
 def main() -> None:
+    _kill_stale_servers()
     # Register bundled NVIDIA CUDA DLLs so ctranslate2/pyannote can find them on GPU.
     from transcript_bot.cuda_dlls import register_nvidia_dlls
 
