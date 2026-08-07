@@ -238,10 +238,11 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
                     f"{segment.speaker}：{segment.text}" for segment in segments if segment.text.strip()
                 )
                 update_meeting_transcript_text(app.config["DATA_DIR"], meeting.id, transcript_text)
+                _aliases = get_speaker_aliases(app.config["DATA_DIR"], meeting.id, meeting.user_id)
                 return jsonify({
                     "ok": True,
                     "speaker_label": new_label,
-                    "display_name": aliases.get(new_label, new_label),
+                    "display_name": _aliases.get(new_label, new_label),
                 })
 
             if request.form.get("form_action") == "metadata":
