@@ -176,12 +176,20 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
             if active_tab == "summary" and summary is None:
                 summary = _generate_meeting_summary(display_transcript_text, meeting.title)
                 update_meeting_summary_text(app.config["DATA_DIR"], meeting.id, _serialize_summary(summary))
+            labels = get_meeting_speaker_labels(app.config["DATA_DIR"], meeting.id)
+            # Merge alias-only speakers (added via + button, have no segments yet)
+            for alias_key in aliases:
+                if alias_key not in labels:
+                    labels.append(alias_key)
+            # Stable sort by speaker number
+            import re as _re
+            labels.sort(key=lambda s: int(_re.search(r'\d+', s).group()) if _re.search(r'\d+', s) else 999)
             return render_template(
                 "edit_meeting.html",
                 meeting=meeting,
                 sidebar_meetings=list_local_meeting_exports(app.config["DATA_DIR"]),
                 segments=get_meeting_segments(app.config["DATA_DIR"], meeting.id, meeting.user_id),
-                speaker_labels=get_meeting_speaker_labels(app.config["DATA_DIR"], meeting.id),
+                speaker_labels=labels,
                 aliases=aliases,
                 display_transcript_text=display_transcript_text,
                 summary=summary,
