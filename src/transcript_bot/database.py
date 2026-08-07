@@ -163,12 +163,18 @@ def save_transcript_segments(data_dir: Path, meeting_id: str, segments: Iterable
         )
 
 
-def update_meeting_transcript_text(data_dir: Path, meeting_id: str, transcript_text: str) -> None:
+def update_meeting_transcript_text(data_dir: Path, meeting_id: str, transcript_text: str, *, preserve_summary: bool = False) -> None:
     with _connect(data_dir) as conn:
-        conn.execute(
-            "UPDATE meetings SET transcript_text = ?, summary_text = '' WHERE id = ?",
-            (transcript_text, meeting_id),
-        )
+        if preserve_summary:
+            conn.execute(
+                "UPDATE meetings SET transcript_text = ? WHERE id = ?",
+                (transcript_text, meeting_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE meetings SET transcript_text = ?, summary_text = '' WHERE id = ?",
+                (transcript_text, meeting_id),
+            )
 
 
 def update_meeting_summary_text(data_dir: Path, meeting_id: str, summary_text: str) -> None:

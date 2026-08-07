@@ -225,7 +225,7 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
                 transcript_text = "\n\n".join(
                     f"{segment.speaker}：{segment.text}" for segment in segments if segment.text.strip()
                 )
-                update_meeting_transcript_text(app.config["DATA_DIR"], meeting.id, transcript_text)
+                update_meeting_transcript_text(app.config["DATA_DIR"], meeting.id, transcript_text, preserve_summary=True)
                 return jsonify({"ok": True})
 
             if request.form.get("form_action") == "speaker":
@@ -245,7 +245,7 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
                 transcript_text = "\n\n".join(
                     f"{segment.speaker}：{segment.text}" for segment in segments if segment.text.strip()
                 )
-                update_meeting_transcript_text(app.config["DATA_DIR"], meeting.id, transcript_text)
+                update_meeting_transcript_text(app.config["DATA_DIR"], meeting.id, transcript_text, preserve_summary=True)
                 _aliases = get_speaker_aliases(app.config["DATA_DIR"], meeting.id, meeting.user_id)
                 return jsonify({
                     "ok": True,
