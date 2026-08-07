@@ -38,6 +38,7 @@ from transcript_bot.formatting import (
     MeetingSummary,
     build_fallback_meeting_summary,
     render_plain_transcript,
+    split_segments_by_sentences,
 )
 from transcript_bot.exporters import write_docx, write_text
 from transcript_bot.storage import create_job_paths, ensure_data_dirs
@@ -477,6 +478,8 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         if cancel_event.is_set():
             return
         _job_progress[job_id] = {"step": "polishing", "pct": 92, "label": "polishing (潤稿整理)"}
+        # Split long segments into sentence-level chunks before saving
+        segments = split_segments_by_sentences(segments)
         save_transcript_segments(data_dir, job_id, segments)
         raw_text = render_plain_transcript(segments)
         transcript_text = polish_transcript(raw_text) if settings.enable_polish else polish_local_transcript(raw_text)

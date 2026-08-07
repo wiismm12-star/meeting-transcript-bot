@@ -247,3 +247,54 @@ def _normalize_speaker_colon(line: str) -> str:
     if match:
         return f"{match.group(1)}：{match.group(2).strip()}"
     return line
+
+
+_SENTENCE_END = re.compile(r"[。！？\n]+")
+
+
+def split_segments_by_sentences(segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
+    """Break long segments into sentence-level chunks (~1-2 lines each).
+
+    Each segment is split on sentence-ending punctuation (。！？) and newlines.
+    Timestamps are interpolated evenly within the original segment's time window.
+    Speaker labels are preserved. Segments shorter than ~60 characters are kept as-is
+    to avoid over-fragmenting very short utterances.
+    """
+    result: list[TranscriptSegment] = []
+    for seg in segments:
+        text = seg.text.strip()
+        if len(text) <= 60:
+            result.append(seg)
+            continue
+
+        # Split on sentence boundaries, keep the delimiter with its sentence
+        parts = [p.strip() for p in _SENTENCE_END.split(text) if p.strip()]
+        if len(parts) <= 1:
+            result.append(seg)
+            continue
+
+        # Filter out fragments that are just punctuation or whitespace
+        parts = [p for p in parts if len(p) >= 2]
+        if not parts:
+            result.append(seg)
+            continue
+
+        # Interpolate timestamps
+        seg_start = seg.start or 0.0
+        seg_end = seg.end or seg_start + 1.0
+        duration = seg_end - seg_start
+        n = len(parts)
+
+        for i, part in enumerate(parts):
+            sub_start = seg_start + (duration * i / n)
+            sub_end = seg_start + (duration * (i + 1) / n)
+            result.append(
+                TranscriptSegment(
+                    speaker=seg.speaker,
+                    start=sub_start,
+                    end=sub_end,
+                    text=part,
+                )
+            )
+
+    return result
