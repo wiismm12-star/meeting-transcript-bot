@@ -68,6 +68,28 @@
     });
   }
 })();
+
+// ── Speaker colors ──
+(function(){
+  const PALETTE = ["#ffb3b8","#f56aaa","#c8b8e8","#8bc4d0","#f0c78e","#a8d8a8","#e8c8a0","#b8c8e8"];
+  const speakerLabels = Array.from(document.querySelectorAll(".chips .chip:not(.add-speaker-chip)")).map(c=>c.dataset.label);
+  function colorFor(speaker){
+    const idx = speakerLabels.indexOf(speaker);
+    return PALETTE[idx>=0?idx%PALETTE.length:0];
+  }
+  function applyColors(){
+    document.querySelectorAll(".chip-dot").forEach(dot=>{
+      const chip = dot.closest(".chip");
+      if(chip&&chip.dataset.label) dot.style.background=colorFor(chip.dataset.label);
+    });
+    document.querySelectorAll(".avatar").forEach(av=>{
+      const name = av.closest(".segment-row")?.querySelector(".speaker-dropdown");
+      if(name&&name.dataset.speaker) av.style.background=colorFor(name.dataset.speaker);
+    });
+  }
+  applyColors();
+  new MutationObserver(applyColors).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:["data-speaker"]});
+})();
 </script>
 
 {% endblock %}{% block content %}<style>
@@ -169,6 +191,28 @@
       location.reload();
     });
   }
+})();
+
+// ── Speaker colors ──
+(function(){
+  const PALETTE = ["#ffb3b8","#f56aaa","#c8b8e8","#8bc4d0","#f0c78e","#a8d8a8","#e8c8a0","#b8c8e8"];
+  const speakerLabels = Array.from(document.querySelectorAll(".chips .chip:not(.add-speaker-chip)")).map(c=>c.dataset.label);
+  function colorFor(speaker){
+    const idx = speakerLabels.indexOf(speaker);
+    return PALETTE[idx>=0?idx%PALETTE.length:0];
+  }
+  function applyColors(){
+    document.querySelectorAll(".chip-dot").forEach(dot=>{
+      const chip = dot.closest(".chip");
+      if(chip&&chip.dataset.label) dot.style.background=colorFor(chip.dataset.label);
+    });
+    document.querySelectorAll(".avatar").forEach(av=>{
+      const name = av.closest(".segment-row")?.querySelector(".speaker-dropdown");
+      if(name&&name.dataset.speaker) av.style.background=colorFor(name.dataset.speaker);
+    });
+  }
+  applyColors();
+  new MutationObserver(applyColors).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:["data-speaker"]});
 })();
 </script>
 
