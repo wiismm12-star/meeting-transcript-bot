@@ -295,7 +295,7 @@ def get_meeting_speaker_labels(data_dir: Path, meeting_id: str) -> list[str]:
             FROM transcript_segments
             WHERE meeting_id = ?
             GROUP BY speaker_label
-            ORDER BY MIN(sequence)
+            ORDER BY CAST(SUBSTR(speaker_label, 9) AS INTEGER), speaker_label
             """,
             (meeting_id,),
         ).fetchall()
