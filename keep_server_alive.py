@@ -13,7 +13,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(r"C:\Users\lan\Documents\開會語音逐字稿")
-VENV_PY = ROOT / ".venv" / "Scripts" / "python.exe"
+# Use pythonw.exe (the windowless Windows launcher) so the server runs fully
+# backgrounded with NO console/black window popping up.
+VENV_PY = ROOT / ".venv" / "Scripts" / "pythonw.exe"
 LOG = ROOT / "server.log"
 PORT = 8765
 CHECK_INTERVAL = 30
@@ -57,7 +59,8 @@ def start_server() -> None:
             stdout=f,
             stderr=subprocess.STDOUT,
             creationflags=subprocess.DETACHED_PROCESS
-            | subprocess.CREATE_NEW_PROCESS_GROUP,
+            | subprocess.CREATE_NEW_PROCESS_GROUP
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0),
             close_fds=True,
         )
 
