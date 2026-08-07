@@ -6,6 +6,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from transcript_bot.config import settings
 
 
@@ -182,3 +184,39 @@ def get_audio_duration(path: Path) -> float:
         return float(result.stdout.strip())
     except ValueError:
         return 0.0
+
+
+def decode_audio_to_pcm(
+    input_path: Path,
+    sample_rate: int = 16000,
+    channels: int = 1,
+) -> tuple[np.ndarray, int]:
+    """Decode any audio file to a float32 mono PCM waveform via ffmpeg.
+
+    Returns ``(samples, sample_rate)`` where ``samples`` is a 1-D ``float32``
+    numpy array in ``[-1, 1]``. This is the **same** decode path the diarizer
+    uses, so Whisper and pyannote always consume bit-identical audio.
+
+    Faster-whisper accepts a raw waveform array, letting us bypass torchcodec
+    entirely — torchcodec fails to load on this machine, and its absence makes
+    faster-whisper fall back to a different decoder whose MP3 priming-silence
+    handling shifts the timeline (dropping the first seconds and ruining speaker
+    alignment). Routing both stages through ffmpeg keeps results deterministic.
+    """
+    ensure_ffmpeg()
+    result = subprocess.run(
+        [
+            "ffmpeg", "-v", "error",
+            "-i", str(input_path),
+            "-vn",
+            "-ac", str(channels),
+            "-ar", str(sample_rate),
+            "-f", "f32le",
+            "pipe:1",
+        ],
+        capture_output=True, check=False,
+    )
+    if result.returncode != 0 or not result.stdout:
+        raise AudioProcessingError("音訊解碼失敗，請確認 ffmpeg 可正常運作。")
+    waveform = np.frombuffer(bytearray(result.stdout), dtype=np.float32)
+    return waveform, sample_rate

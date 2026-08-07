@@ -54,11 +54,19 @@ def transcribe_with_local_whisper(audio_path: Path, progress_callback=None) -> l
 def transcribe_chunk_with_model(
     model, audio_path: Path, progress_callback=None
 ) -> list[TranscriptSegment]:
-    """Transcribe a single chunk using a pre-loaded model (thread-safe enough for CPU)."""
+    """Transcribe a single chunk using a pre-loaded model (thread-safe enough for CPU).
+
+    The audio is decoded to a float32 PCM waveform via ffmpeg (the same path the
+    diarizer uses) and passed straight to faster-whisper as a numpy array, so the
+    result is deterministic and independent of torchcodec's (broken) decoder.
+    """
+    from transcript_bot.audio import decode_audio_to_pcm
+
     prompt = getattr(model, "_whisper_prompt", None)
     try:
+        waveform, sample_rate = decode_audio_to_pcm(audio_path, sample_rate=16000, channels=1)
         segments_iter, _ = model.transcribe(
-            str(audio_path),
+            waveform,
             language=settings.whisper_language or None,
             task="transcribe",
             beam_size=5,
