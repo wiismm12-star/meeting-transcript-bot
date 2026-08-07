@@ -27,6 +27,7 @@ from transcript_bot.database import (
     update_meeting_metadata,
     update_meeting_summary_text,
     update_transcript_segment_text,
+    update_transcript_segment_speaker,
     update_meeting_transcript_text,
 )
 from transcript_bot.formatting import (
@@ -218,6 +219,30 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
                 )
                 update_meeting_transcript_text(app.config["DATA_DIR"], meeting.id, transcript_text)
                 return jsonify({"ok": True})
+
+            if request.form.get("form_action") == "speaker":
+                try:
+                    sequence = int(request.form.get("sequence", ""))
+                except ValueError:
+                    return jsonify({"error": "找不到逐字稿段落。"}), 400
+                new_label = request.form.get("speaker_label", "").strip()
+                if not new_label:
+                    return jsonify({"error": "請指定主講人。"}), 400
+                if not update_transcript_segment_speaker(
+                    app.config["DATA_DIR"], meeting.id, meeting.user_id, sequence, new_label
+                ):
+                    return jsonify({"error": "逐字稿段落已不存在。"}), 400
+                # Rebuild transcript_text after speaker change
+                segments = get_meeting_segments(app.config["DATA_DIR"], meeting.id, meeting.user_id)
+                transcript_text = "\n\n".join(
+                    f"{segment.speaker}：{segment.text}" for segment in segments if segment.text.strip()
+                )
+                update_meeting_transcript_text(app.config["DATA_DIR"], meeting.id, transcript_text)
+                return jsonify({
+                    "ok": True,
+                    "speaker_label": new_label,
+                    "display_name": aliases.get(new_label, new_label),
+                })
 
             if request.form.get("form_action") == "metadata":
                 title = request.form.get("title", "").strip()[:160]

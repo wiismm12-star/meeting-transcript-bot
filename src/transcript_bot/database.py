@@ -195,6 +195,22 @@ def update_transcript_segment_text(
     return result.rowcount == 1
 
 
+def update_transcript_segment_speaker(
+    data_dir: Path, meeting_id: str, user_id: int, sequence: int, speaker_label: str
+) -> bool:
+    with _connect(data_dir) as conn:
+        result = conn.execute(
+            """
+            UPDATE transcript_segments
+            SET speaker_label = ?
+            WHERE meeting_id = ? AND sequence = ?
+              AND EXISTS (SELECT 1 FROM meetings WHERE id = ? AND user_id = ?)
+            """,
+            (speaker_label, meeting_id, sequence, meeting_id, user_id),
+        )
+    return result.rowcount == 1
+
+
 def update_meeting_metadata(data_dir: Path, meeting_id: str, title: str, notes: str) -> None:
     with _connect(data_dir) as conn:
         conn.execute(
