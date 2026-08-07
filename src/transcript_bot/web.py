@@ -456,7 +456,7 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
             return
         _job_progress[job_id] = {"step": "normalizing", "pct": 5, "label": "normalizing (音檔標準化)"}
         normalize_audio(paths.input_audio, paths.normalized_audio)
-        _job_progress[job_id] = {"step": "normalizing", "pct": 25, "label": "normalizing (音檔標準化)"}
+        _job_progress[job_id] = {"step": "normalizing", "pct": 20, "label": "normalizing (音檔標準化)"}
 
         # Reject only after normalization so long, high-bitrate recordings still
         # get in and are auto-split. The normalized 64kbps ceiling is the real cap.
@@ -478,11 +478,11 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         def _on_transcribe_progress(last_segment_time: float, _unused: float) -> None:
             nonlocal duration
             if last_segment_time < 0:  # signal: transcription complete
-                _job_progress[job_id] = {"step": "transcribing", "pct": 90, "label": "transcribing (語音辨識)"}
+                _job_progress[job_id] = {"step": "transcribing", "pct": 80, "label": "transcribing (語音辨識)"}
                 return
-            # Chunk-based progress: direct pct in 20 → 90 range.
+            # Chunk-based progress: direct pct in 20 → 80 range.
             if _unused == -999.0:
-                pct = min(90, max(25, int(last_segment_time)))
+                pct = min(80, max(25, int(last_segment_time)))
                 existing_pct = _job_progress.get(job_id, {}).get("pct", 0)
                 if existing_pct >= pct:
                     return
@@ -491,7 +491,7 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
                 return
             # Time-based progress (single-chunk path).
             if duration > 0:
-                pct = min(90, 20 + int((last_segment_time / duration) * 70))
+                pct = min(80, 20 + int((last_segment_time / duration) * 60))
                 existing_pct = _job_progress.get(job_id, {}).get("pct", 0)
                 if existing_pct >= pct:
                     return
@@ -518,22 +518,35 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
             )
         )
 
-        # Step 3: Polish & save (90 → 100%)
+        # Step 3: Polish & save (80 → 88%)
         if cancel_event.is_set():
             return
-        _job_progress[job_id] = {"step": "polishing", "pct": 92, "label": "polishing (潤稿整理)"}
+        _job_progress[job_id] = {"step": "polishing", "pct": 82, "label": "polishing (潤稿整理)"}
         # Split long segments into sentence-level chunks before saving
         segments = split_segments_by_sentences(segments)
         save_transcript_segments(data_dir, job_id, segments)
         raw_text = render_plain_transcript(segments)
         transcript_text = polish_transcript(raw_text) if settings.enable_polish else polish_local_transcript(raw_text)
-        _job_progress[job_id] = {"step": "saving", "pct": 97, "label": "saving (儲存中)"}
+        _job_progress[job_id] = {"step": "saving", "pct": 86, "label": "saving (儲存中)"}
         update_meeting_transcript_text(data_dir, job_id, transcript_text)
         # Sync polished text back to individual segments so the editor shows punctuation.
         _sync_polished_segments(data_dir, job_id, transcript_text, segments)
         update_meeting_metadata(data_dir, job_id, Path(original_filename).stem[:160], "")
+
+        # Step 4: Summary (88 → 94%)
+        if cancel_event.is_set():
+            return
+        _job_progress[job_id] = {"step": "summarizing", "pct": 90, "label": "summarizing (會議摘要)"}
         summary = _generate_meeting_summary(transcript_text, Path(original_filename).stem[:160])
         update_meeting_summary_text(data_dir, job_id, _serialize_summary(summary))
+
+        # Step 5: Action items (94 → 100%)
+        if cancel_event.is_set():
+            return
+        _job_progress[job_id] = {"step": "actions", "pct": 96, "label": "actions (待辦事項提取)"}
+        action_text = extract_actions_with_ollama(transcript_text)
+        update_meeting_action_text(data_dir, job_id, action_text)
+
         _job_progress[job_id] = {"step": "done", "pct": 100, "label": "done (完成)"}
 
     except Exception:
