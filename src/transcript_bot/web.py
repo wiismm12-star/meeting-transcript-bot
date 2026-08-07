@@ -526,7 +526,16 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         segments = split_segments_by_sentences(segments)
         save_transcript_segments(data_dir, job_id, segments)
         raw_text = render_plain_transcript(segments)
-        transcript_text = polish_transcript(raw_text) if settings.enable_polish else polish_local_transcript(raw_text)
+        try:
+            transcript_text = polish_transcript(raw_text) if settings.enable_polish else polish_local_transcript(raw_text)
+        except OllamaError:
+            # Ollama unavailable (service down / model not pulled) must NOT scrap
+            # the whole job. Degrade to local rule-based cleanup and keep the raw
+            # transcript so the meeting still completes and is viewable.
+            import logging as _logging
+            _logging.getLogger("transcript_bot.web").warning(
+                "Ollama 潤稿失敗，降級為本地規則清理並保留原始逐字稿 job=%s", job_id)
+            transcript_text = polish_local_transcript(raw_text)
         _job_progress[job_id] = {"step": "saving", "pct": 86, "label": "saving (儲存中)"}
         update_meeting_transcript_text(data_dir, job_id, transcript_text)
         # Sync polished text back to individual segments so the editor shows punctuation.
