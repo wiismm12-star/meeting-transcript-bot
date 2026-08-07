@@ -38,7 +38,8 @@
           if (!resp.ok) { alert("更換主講人失敗。"); return; }
           const data = await resp.json();
           el.dataset.speaker = data.speaker_label;
-          el.textContent = data.display_name;
+            el.textContent = data.display_name;
+            const row = el.closest(".segment-row"); if (row) { const av = row.querySelector(".avatar"); if (av) av.textContent = data.display_name.charAt(0); }
         });
         menu.appendChild(btn);
       });
@@ -87,7 +88,7 @@
   {% if saved %}<p class="notice">已儲存逐字稿。</p>{% endif %}{% if aliases_saved %}<p class="notice">已儲存主講人名稱。</p>{% endif %}{% if metadata_saved %}<p class="notice">已儲存會議名稱。</p>{% endif %}{% if notes_saved %}<p class="notice">已儲存會議筆記。</p>{% endif %}{% if error %}<p class="error">{{ error }}</p>{% endif %}
   <nav class="tabs"><a class="{{ 'active' if active_tab == 'transcript' }}" href="{{ url_for('edit_meeting',meeting_id=meeting.id,tab='transcript') }}">會議逐字稿</a><a class="{{ 'active' if active_tab == 'summary' }}" href="{{ url_for('edit_meeting',meeting_id=meeting.id,tab='summary') }}">會議摘要</a><a class="{{ 'active' if active_tab == 'actions' }}" href="{{ url_for('edit_meeting',meeting_id=meeting.id,tab='actions') }}">待辦事項</a><a class="{{ 'active' if active_tab == 'notes' }}" href="{{ url_for('edit_meeting',meeting_id=meeting.id,tab='notes') }}">團隊筆記</a></nav>
   {% if active_tab == 'transcript' %}
-    <section class="segments">{% for segment in segments %}<article class="segment segment-row"><button type="button" class="avatar play-segment" data-start="{{ segment.start }}">S</button><span class="segment-head"><strong class="speaker-name speaker-dropdown" data-speaker="{{ segment.speaker }}" data-sequence="{{ loop.index }}" tabindex="0">{{ aliases.get(segment.speaker,segment.speaker) }}</strong><span class="time">{{ '%d:%02d'|format((segment.start or 0)|int // 60, (segment.start or 0)|int % 60) }}</span></span><span class="segment-editor" data-sequence="{{ loop.index }}"><span class="segment-text editable-segment">{{ segment.text }}</span><input class="segment-input" value="{{ segment.text }}" hidden><button class="save-segment" type="button" hidden>✓</button><button class="cancel-segment" type="button" hidden>×</button></span></article>{% endfor %}</section>
+    <section class="segments">{% for segment in segments %}<article class="segment segment-row"><button type="button" class="avatar play-segment" data-start="{{ segment.start }}">{{ aliases.get(segment.speaker,segment.speaker)[0] }}</button><span class="segment-head"><strong class="speaker-name speaker-dropdown" data-speaker="{{ segment.speaker }}" data-sequence="{{ loop.index }}" tabindex="0">{{ aliases.get(segment.speaker,segment.speaker) }}</strong><span class="time">{{ '%d:%02d'|format((segment.start or 0)|int // 60, (segment.start or 0)|int % 60) }}</span></span><span class="segment-editor" data-sequence="{{ loop.index }}"><span class="segment-text editable-segment">{{ segment.text }}</span><input class="segment-input" value="{{ segment.text }}" hidden><button class="save-segment" type="button" hidden>✓</button><button class="cancel-segment" type="button" hidden>×</button></span></article>{% endfor %}</section>
   {% elif active_tab == 'summary' %}<section class="summary-workbench"><div class="summary-toolbar"><span class="summary-label"><span aria-hidden="true">▧</span> 會議摘要</span><form method="post"><input type="hidden" name="form_action" value="summary"><button class="summary-refresh" type="submit">↻　重新產生摘要</button></form></div>{% if summary %}<article class="summary-card"><h2>{{ summary.title }}</h2><p class="summary-overview">{{ summary.overview }}</p><ul>{% for highlight in summary.highlights %}<li>{{ highlight }}</li>{% endfor %}</ul></article>{% else %}<article class="summary-card summary-empty"><h2>尚未產生摘要</h2><p>請按「重新產生摘要」整理本次會議內容。</p></article>{% endif %}</section>
   {% elif active_tab == 'actions' %}<section class="summary-panel"><h2>待辦事項</h2><pre>{{ action_text }}</pre></section>
   {% else %}<section class="summary-panel"><h2>團隊筆記</h2><form method="post"><input type="hidden" name="form_action" value="notes"><textarea name="notes" placeholder="記錄補充事項、想法或後續追蹤。">{{ meeting.notes }}</textarea><p><button type="submit">儲存筆記</button></p></form></section>{% endif %}
@@ -139,7 +140,8 @@
           if (!resp.ok) { alert("更換主講人失敗。"); return; }
           const data = await resp.json();
           el.dataset.speaker = data.speaker_label;
-          el.textContent = data.display_name;
+            el.textContent = data.display_name;
+            const row = el.closest(".segment-row"); if (row) { const av = row.querySelector(".avatar"); if (av) av.textContent = data.display_name.charAt(0); }
         });
         menu.appendChild(btn);
       });
