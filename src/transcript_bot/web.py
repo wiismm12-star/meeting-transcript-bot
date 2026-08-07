@@ -256,7 +256,11 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
                 return redirect(url_for("edit_meeting", meeting_id=meeting.id, tab="notes", notes_saved="1"))
 
             if request.form.get("form_action") == "aliases":
-                labels = get_meeting_speaker_labels(app.config["DATA_DIR"], meeting.id)
+                labels = set(get_meeting_speaker_labels(app.config["DATA_DIR"], meeting.id))
+                # Also accept labels from form that aren't in DB yet (e.g. newly added via +)
+                for key in request.form:
+                    if key.startswith("alias_"):
+                        labels.add(key[6:])
                 aliases = {
                     label: request.form.get(f"alias_{label}", "").strip()
                     for label in labels
