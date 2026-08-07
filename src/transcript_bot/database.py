@@ -29,6 +29,7 @@ class MeetingExportRecord:
     notes: str
     transcript_text: str
     summary_text: str
+    action_text: str
     transcript_txt_path: str
     transcript_docx_path: str
     audio_file_path: str = ""
@@ -217,6 +218,14 @@ def update_transcript_segment_speaker(
     return result.rowcount == 1
 
 
+def update_meeting_action_text(data_dir: Path, meeting_id: str, action_text: str) -> None:
+    with _connect(data_dir) as conn:
+        conn.execute(
+            "UPDATE meetings SET action_text = ? WHERE id = ?",
+            (action_text, meeting_id),
+        )
+
+
 def update_meeting_metadata(data_dir: Path, meeting_id: str, title: str, notes: str) -> None:
     with _connect(data_dir) as conn:
         conn.execute(
@@ -254,7 +263,7 @@ def get_local_meeting_export(data_dir: Path, meeting_id: str) -> MeetingExportRe
     with _connect(data_dir) as conn:
         row = conn.execute(
             """
-            SELECT id, user_id, created_at, title, notes, transcript_text, summary_text, transcript_txt_path, transcript_docx_path, audio_file_path
+            SELECT id, user_id, created_at, title, notes, transcript_text, summary_text, action_text, transcript_txt_path, transcript_docx_path, audio_file_path
             FROM meetings
             WHERE id = ?
             """,
@@ -268,7 +277,7 @@ def list_local_meeting_exports(data_dir: Path, limit: int = 100) -> list[Meeting
     with _connect(data_dir) as conn:
         rows = conn.execute(
             """
-            SELECT id, user_id, created_at, title, notes, transcript_text, summary_text, transcript_txt_path, transcript_docx_path, audio_file_path
+            SELECT id, user_id, created_at, title, notes, transcript_text, summary_text, action_text, transcript_txt_path, transcript_docx_path, audio_file_path
             FROM meetings
             ORDER BY created_at DESC
             LIMIT ?
@@ -469,6 +478,7 @@ def _meeting_export_from_row(row: sqlite3.Row | None) -> MeetingExportRecord | N
         notes=str(row["notes"]),
         transcript_text=str(row["transcript_text"]),
         summary_text=str(row["summary_text"]),
+        action_text=str(row["action_text"]),
         transcript_txt_path=str(row["transcript_txt_path"]),
         transcript_docx_path=str(row["transcript_docx_path"]),
         audio_file_path=str(row["audio_file_path"]),

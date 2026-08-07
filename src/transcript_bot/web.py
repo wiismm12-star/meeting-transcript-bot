@@ -28,6 +28,7 @@ from transcript_bot.database import (
     update_meeting_summary_text,
     update_transcript_segment_text,
     update_transcript_segment_speaker,
+    update_meeting_action_text,
     update_meeting_transcript_text,
 )
 from transcript_bot.formatting import (
@@ -44,7 +45,7 @@ from transcript_bot.formatting import (
 from transcript_bot.exporters import write_docx, write_text
 from transcript_bot.storage import create_job_paths, ensure_data_dirs
 from transcript_bot.transcription import transcribe_audio_smart
-from transcript_bot.ollama_client import OllamaError, summarize_meeting_with_ollama
+from transcript_bot.ollama_client import OllamaError, extract_actions_with_ollama, summarize_meeting_with_ollama
 from transcript_bot.line_bot import LineBotError, acknowledgement_for_event, reply_to_line, verify_webhook_signature
 
 # Module-level job tracking for async transcription
@@ -176,6 +177,11 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
             if active_tab == "summary" and summary is None:
                 summary = _generate_meeting_summary(display_transcript_text, meeting.title)
                 update_meeting_summary_text(app.config["DATA_DIR"], meeting.id, _serialize_summary(summary))
+            if active_tab == "actions" and not meeting.action_text.strip():
+                action_text = extract_actions_with_ollama(display_transcript_text)
+                update_meeting_action_text(app.config["DATA_DIR"], meeting.id, action_text)
+            else:
+                action_text = meeting.action_text
             labels = get_meeting_speaker_labels(app.config["DATA_DIR"], meeting.id)
             # Merge alias-only speakers (added via + button, have no segments yet)
             for alias_key in aliases:
@@ -193,7 +199,7 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
                 aliases=aliases,
                 display_transcript_text=display_transcript_text,
                 summary=summary,
-                action_text=render_action_summary(display_transcript_text),
+                action_text=action_text,
                 active_tab=active_tab,
                 audio_available=get_local_meeting_audio_path(app.config["DATA_DIR"], meeting.id) is not None,
                 saved=request.args.get("saved") == "1",

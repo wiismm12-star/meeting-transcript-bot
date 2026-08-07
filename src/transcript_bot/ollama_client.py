@@ -127,6 +127,15 @@ _SUMMARY_CHUNK_THRESHOLD = 8000
 _SUMMARY_CHUNK_SIZE = 6000
 _SUMMARY_CHUNK_OVERLAP = 800
 
+# Action items extraction: 1-2 sentences per item, very fast even on 8B.
+_ACTIONS_SYSTEM_PROMPT = """
+你是一名嚴謹的繁體中文會議助理。請根據提供的逐字稿，整理會議中**明確提及**的待辦事項、決議、行動項目或後續追蹤事項。
+只回傳 JSON，格式嚴格為：{"items":[{"owner":"...","task":"...","deadline":"..."},...]}
+每條 item：owner 是負責人（若未指定則填「未指定」）；task 用 1-2 句敘述任務；deadline 是期限（若未提及則填「未提及」）。
+只提取原文明確出現的內容，不得杜撰。若原文無任何待辦事項，回傳 {"items":[]}。
+使用繁體中文。
+""".strip()
+
 
 def polish_with_ollama(raw_transcript: str) -> str:
     """Polish each speaker turn independently so labels and turn order cannot be rewritten.
@@ -222,6 +231,36 @@ def summarize_meeting_with_ollama(raw_transcript: str, fallback_title: str = "")
     return {"title": title or fallback_title or "會議重點摘要", "overview": overview, "highlights": highlights[:5]}
 
 
+def extract_actions_with_ollama(transcript_text: str) -> str:
+    """Extract action items from a transcript via local Ollama, return formatted markdown."""
+    transcript = (transcript_text or "").strip()
+    if not transcript:
+        return "# 待辦事項\n\n無逐字稿內容可供分析。"
+
+    try:
+        payload = _ollama_chat_json(
+            _ACTIONS_SYSTEM_PROMPT,
+            transcript,
+            timeout=120.0,
+        )
+    except (OllamaError, OllamaSchemaError):
+        from transcript_bot.formatting import render_action_summary
+        return render_action_summary(transcript)
+
+    items = payload.get("items", []) or []
+    if not items:
+        return "# 待辦事項\n\n未偵測到明確的待辦事項或決議。"
+
+    lines = ["# 待辦事項", ""]
+    for item in items:
+        owner = str(item.get("owner", "") or "未指定").strip()
+        task = str(item.get("task", "") or "").strip()
+        deadline = str(item.get("deadline", "") or "未提及").strip()
+        if not task:
+            continue
+        lines.append(f"- **{owner}**：{task}（期限：{deadline}）")
+
+    return "\n".join(lines) if len(lines) > 2 else "# 待辦事項\n\n未偵測到明確的待辦事項或決議。"
 def _summarize_single(transcript: str, fallback_title: str) -> dict[str, object]:
     """Single-call summary for short transcripts."""
     payload = _ollama_chat_json(
