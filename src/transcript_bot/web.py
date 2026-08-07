@@ -640,30 +640,85 @@ def _deserialize_summary(value: str) -> MeetingSummary | None:
 
 
 def _kill_stale_servers() -> None:
-    """Kill leftover processes already bound to port 8765 so we can start clean."""
+    """Kill all other transcript_bot.web processes so THIS instance owns port 8765.
+
+    Any process running ``transcript_bot.web`` other than ourselves is a stale
+    server (whether launched from our ``.venv`` or another Python install such as
+    uv's cached cpython) that would otherwise serve stale code or race for the
+    port. Kill them all by command-line match, then by port binding, then wait
+    until the port is actually free.
+    """
     import os as _os
     import subprocess as _sp
+    import time as _time
 
     current_pid = _os.getpid()
+
+    # 1) Kill every transcript_bot.web process except ourselves.
     try:
         result = _sp.run(
-            ["netstat", "-ano"], capture_output=True, text=True, timeout=5
+            [
+                "wmic", "process", "where", "Name like 'python%'",
+                "get", "ProcessId,CommandLine", "/format:csv",
+            ],
+            capture_output=True, text=True, timeout=15, errors="ignore",
+        )
+        for line in result.stdout.splitlines():
+            if not line.strip() or line.startswith("Node,"):
+                continue
+            parts = line.split(",")
+            if len(parts) < 3:
+                continue
+            # CSV columns: Node, CommandLine, ProcessId
+            try:
+                cmd_line = parts[1].strip().lower()
+                pid = int(parts[2].strip())
+            except (ValueError, IndexError):
+                continue
+            if "transcript_bot.web" not in cmd_line:
+                continue
+            if pid == current_pid:
+                continue
+            _sp.run(
+                ["taskkill", "/F", "/PID", str(pid)],
+                capture_output=True, timeout=5,
+            )
+    except Exception:
+        pass
+
+    # 2) Kill whatever is already bound to port 8765 (if not us).
+    try:
+        result = _sp.run(
+            ["netstat", "-ano"], capture_output=True, text=True, timeout=5, errors="ignore"
         )
         for line in result.stdout.splitlines():
             if ":8765" in line and "LISTENING" in line:
-                parts = line.strip().split()
                 try:
-                    pid = int(parts[-1])
+                    pid = int(line.strip().split()[-1])
                 except ValueError:
                     continue
                 if pid == current_pid:
                     continue
                 _sp.run(
-                    ["taskkill", "//F", "//PID", str(pid)],
+                    ["taskkill", "/F", "/PID", str(pid)],
                     capture_output=True, timeout=5,
                 )
     except Exception:
         pass
+
+    # 3) Wait until port 8765 is actually free before returning.
+    for _ in range(10):
+        try:
+            result = _sp.run(
+                ["netstat", "-ano"], capture_output=True, text=True, timeout=5, errors="ignore"
+            )
+            if not any(":8765" in line and "LISTENING" in line
+                       and line.strip().split()[-1] != str(current_pid)
+                       for line in result.stdout.splitlines()):
+                return
+        except Exception:
+            pass
+        _time.sleep(0.5)
 
 
 def main() -> None:
@@ -675,7 +730,9 @@ def main() -> None:
     app = create_web_app()
     app.jinja_env.auto_reload = True  # reload templates on every request in dev
     # Loopback binding is deliberate: this MVP must not be exposed to a network.
-    app.run(host="127.0.0.1", port=8765, debug=False)
+    # use_reloader=False prevents Werkzeug from spawning a child interpreter
+    # (which on this machine resolves to uv's cached cpython and steals port 8765).
+    app.run(host="127.0.0.1", port=8765, debug=False, use_reloader=False)
 
 
 def _register_nvidia_dlls() -> None:  # pragma: no cover - thin alias
