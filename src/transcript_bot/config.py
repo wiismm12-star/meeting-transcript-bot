@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     telegram_api_hash: str = ""
     telegram_api_base_url: str = ""
     telegram_local_mode: bool = False
+    telegram_local_file_root: str = "/var/lib/telegram-bot-api"
+    telegram_local_file_host_root: Path = Path("./data/telegram-bot-api")
+    # A local Bot API server may need to fetch a large file from Telegram before
+    # it can answer getFile, which takes much longer than PTB's 5-second default.
+    telegram_request_timeout: int = 600
     openai_api_key: str = ""
     deepgram_api_key: str = ""
     deepgram_keyterms: str = ""
@@ -102,6 +107,8 @@ class Settings(BaseSettings):
             raise RuntimeError("GLADIA_NUM_SPEAKERS 必須是 0 或正整數。")
         if self.max_concurrent_jobs < 1:
             raise RuntimeError("MAX_CONCURRENT_JOBS 必須是 1 或以上的正整數。")
+        if self.telegram_request_timeout < 1:
+            raise RuntimeError("TELEGRAM_REQUEST_TIMEOUT 必須是正整數。")
 
 
 settings = Settings()

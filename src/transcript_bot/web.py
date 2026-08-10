@@ -46,6 +46,7 @@ from transcript_bot.storage import create_job_paths, ensure_data_dirs
 from transcript_bot.transcription import transcribe_audio_smart
 from transcript_bot.ollama_client import OllamaError, summarize_meeting_with_ollama
 from transcript_bot.line_bot import LineBotError, acknowledgement_for_event, reply_to_line, verify_webhook_signature
+from transcript_bot.job_status import get_job_status, is_job_active, list_active_job_statuses, request_cancel
 
 # Module-level job tracking for async transcription
 _active_jobs: dict[str, threading.Thread] = {}
@@ -107,6 +108,8 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
         meetings = list_local_meeting_exports(app.config["DATA_DIR"])
         active_meetings = [m for m in meetings if not m.transcript_text]
         done_meetings = [m for m in meetings if m.transcript_text]
+        telegram_jobs = list_active_job_statuses(app.config["DATA_DIR"])
+        visible_jobs = {**_job_progress, **telegram_jobs}
         return render_template(
             "index.html",
             active_meetings=active_meetings,
@@ -114,8 +117,8 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
             upload_error=request.args.get("error"),
             deleted_count=request.args.get("deleted", type=int),
             cancelled=request.args.get("cancelled") == "1",
-            active_jobs=_active_jobs,
-            job_progress=_job_progress,
+            active_jobs={**_active_jobs, **telegram_jobs},
+            job_progress=visible_jobs,
             telegram_status=get_telegram_bot_status(app.config["DATA_DIR"]),
         )
 
@@ -337,6 +340,11 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
         if not meeting:
             abort(404)
 
+        external_status = get_job_status(app.config["DATA_DIR"], meeting_id)
+        if is_job_active(external_status):
+            request_cancel(app.config["DATA_DIR"], meeting_id)
+            return redirect(url_for("index", cancelling="1"))
+
         # Signal cancel if job is currently running
         cancel_flag = _cancel_flags.get(meeting_id)
         if cancel_flag:
@@ -405,7 +413,7 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
     @app.get("/api/jobs/<job_id>/progress")
     def job_progress(job_id: str):
         """Return transcription progress as JSON for JS polling."""
-        prog = _job_progress.get(job_id)
+        prog = _job_progress.get(job_id) or get_job_status(app.config["DATA_DIR"], job_id)
         if not prog:
             return jsonify({"active": False})
         return jsonify(
@@ -418,6 +426,12 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
                 "label": prog.get("label", prog["step"]),
             }
         )
+
+    @app.get("/api/jobs/active")
+    def active_jobs():
+        """Expose active job IDs so an idle home page notices new Telegram work."""
+        telegram_jobs = list_active_job_statuses(app.config["DATA_DIR"])
+        return jsonify({"jobs": sorted(set(_job_progress) | set(telegram_jobs))})
 
     return app
 
@@ -700,7 +714,8 @@ def _purge_orphaned_meetings(data_dir: str) -> None:
     """Delete meetings with empty transcript that have no active background thread (leftover from killed server)."""
     meetings = list_local_meeting_exports(data_dir)
     for meeting in meetings:
-        if not meeting.transcript_text and meeting.id not in _active_jobs:
+        if (not meeting.transcript_text and meeting.id not in _active_jobs
+                and not is_job_active(get_job_status(Path(data_dir), meeting.id))):
             _delete_local_meeting_files(data_dir, meeting.id)
             delete_meeting(data_dir, meeting.id, meeting.user_id)
 

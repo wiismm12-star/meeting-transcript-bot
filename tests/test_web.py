@@ -20,6 +20,7 @@ from transcript_bot.transcription import TranscriptSegment
 from transcript_bot.database import save_transcript_segments
 from transcript_bot.web import _sync_polished_segments, create_web_app
 from transcript_bot.formatting import split_segments_by_sentences
+from transcript_bot.job_status import get_job_status, write_job_status
 
 
 class LocalWebCorrectionTests(unittest.TestCase):
@@ -58,6 +59,42 @@ class LocalWebCorrectionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(self.meeting_id.encode(), response.data)
         self.assertIn("新增一場會議".encode(), response.data)
+
+    def test_telegram_processing_job_appears_and_web_cancel_requests_stop(self) -> None:
+        pending_id = "telegram-processing"
+        create_meeting(
+            self.data_dir,
+            MeetingRecord(
+                id=pending_id, user_id=1001, source_platform="telegram",
+                audio_file_path=str(self.audio_path), normalized_audio_path="",
+                transcript_txt_path="", transcript_docx_path="",
+            ),
+        )
+        write_job_status(
+            self.data_dir, pending_id, source="telegram", step="transcribing", pct=45,
+            label="transcribing (語音辨識)",
+        )
+
+        page = self.client.get("/")
+        response = self.client.post(
+            f"/meetings/{pending_id}/delete", data={"cancelled": "1"}, follow_redirects=True
+        )
+
+        self.assertIn(pending_id.encode(), page.data)
+        self.assertIn("45%".encode(), page.data)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(get_job_status(self.data_dir, pending_id)["cancel_requested"])
+
+    def test_active_jobs_endpoint_detects_telegram_work_for_idle_home_page(self) -> None:
+        write_job_status(
+            self.data_dir, "telegram-new", source="telegram", step="downloading", pct=0,
+            label="downloading (從 Telegram 下載音檔)",
+        )
+
+        response = self.client.get("/api/jobs/active")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("telegram-new", response.get_json()["jobs"])
 
     def test_index_and_api_show_telegram_bot_status_without_secrets(self) -> None:
         (self.data_dir / "telegram_bot_status.json").write_text(

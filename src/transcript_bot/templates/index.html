@@ -5,7 +5,7 @@
     <div><p class="eyebrow">LOCAL MEETING WORKBENCH</p><h1>本機逐字稿校稿</h1><p class="hero-copy">上傳錄音、校對逐字稿，將每一場會議整理成可閱讀的紀錄。</p><p class="local-badge"><span>●</span> 僅限本機使用 · 127.0.0.1</p><p id="telegram-status" class="telegram-badge {{ telegram_status.state }}"><span>●</span> Telegram Bot · <strong>{{ telegram_status.label }}</strong><small>{{ telegram_status.message }}</small></p></div>
     <div class="hero-mark" aria-hidden="true"><span>〰</span><i></i><i></i><i></i></div>
   </section>
-  {% if upload_error %}<p class="error">{{ upload_error }}</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if deleted_count %}<p class="notice">已刪除 {{ deleted_count }} 場會議。</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if cancelled %}<p class="notice">已終止轉錄，音檔已釋放。</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if request.args.get('uploaded') %}<p class="notice">音檔已上傳，正在背景轉錄中…</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}
+  {% if upload_error %}<p class="error">{{ upload_error }}</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if deleted_count %}<p class="notice">已刪除 {{ deleted_count }} 場會議。</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if cancelled %}<p class="notice">已終止轉錄，音檔已釋放。</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if request.args.get('cancelling') %}<p class="notice">已提出終止要求；目前步驟結束後會清理音檔與會議資料。</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if request.args.get('uploaded') %}<p class="notice">音檔已上傳，正在背景轉錄中…</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}
   <section class="upload-panel">
     <div class="section-heading"><div><p class="eyebrow">NEW TRANSCRIPT</p><h2>新增一場會議</h2></div><span class="format-note">m4a · mp3 · wav · ogg · webm · mp4 · aac</span></div>
     <form class="upload-form" method="post" action="{{ url_for('upload_audio') }}" enctype="multipart/form-data">
@@ -67,28 +67,30 @@
       syncSelection();
     }
     {# ── Progress polling + auto-refresh ── #}
-    {% if job_progress|length > 0 %}
+    const pageJobs={{ job_progress.keys()|list|tojson }}.sort();
+    const sameJobs=jobs=>jobs.length===pageJobs.length&&jobs.every((job,index)=>job===pageJobs[index]);
     const pollProgress=()=>{
-      const jobs={{ job_progress.keys()|list|tojson }};
-      if(!jobs.length){location.reload();return;}
-      Promise.all(jobs.map(jid=>
-        fetch('/api/jobs/'+jid+'/progress').then(r=>r.json()).then(data=>{
-          const short=jid.substring(0,12), bar=document.getElementById('prog-'+short);
-          if(!bar)return data;
-          const pct=data.pct||0, fill=bar.querySelector('.progress-fill');
-          if(fill)fill.style.width=pct+'%';
-          const txt=document.getElementById('prog-text-'+short);
-          if(txt)txt.textContent=pct+'%';
-          const stage=document.getElementById('prog-stage-'+short);
-          if(stage&&data.label)stage.textContent=data.label;
-          return data;
-        })
-      )).then(results=>{
-        const allDone=results.every(d=>!d.active);
-        if(allDone)location.reload();else setTimeout(pollProgress,2000);
-      });
+      fetch('/api/jobs/active').then(response=>response.json()).then(snapshot=>{
+        const jobs=(snapshot.jobs||[]).sort();
+        if(!sameJobs(jobs)){location.reload();return null;}
+        return Promise.all(jobs.map(jid=>
+          fetch('/api/jobs/'+jid+'/progress').then(r=>r.json()).then(data=>{
+            const short=jid.substring(0,12), bar=document.getElementById('prog-'+short);
+            if(!bar)return data;
+            const pct=data.pct||0, fill=bar.querySelector('.progress-fill');
+            if(fill)fill.style.width=pct+'%';
+            const txt=document.getElementById('prog-text-'+short);
+            if(txt)txt.textContent=pct+'%';
+            const stage=document.getElementById('prog-stage-'+short);
+            if(stage&&data.label)stage.textContent=data.label;
+            return data;
+          })
+        ));
+      }).then(results=>{
+        if(results&&results.some(data=>!data.active)){location.reload();return;}
+        setTimeout(pollProgress,2000);
+      }).catch(()=>setTimeout(pollProgress,5000));
     };
     pollProgress();
-    {% endif %}
   </script>
 {% endblock %}

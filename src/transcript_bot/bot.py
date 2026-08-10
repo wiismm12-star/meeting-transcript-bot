@@ -5,11 +5,12 @@ import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from pathlib import PurePosixPath
 
 from openai import RateLimitError
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TimedOut
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -20,7 +21,7 @@ from telegram.ext import (
     filters,
 )
 
-from transcript_bot.audio import AudioProcessingError, normalize_audio
+from transcript_bot.audio import AudioProcessingError, get_audio_duration, normalize_audio
 from transcript_bot.config import settings
 from transcript_bot.database import (
     MeetingRecord,
@@ -55,6 +56,7 @@ from transcript_bot.formatting import (
 )
 from transcript_bot.storage import create_job_paths
 from transcript_bot.transcription import transcribe_audio_smart
+from transcript_bot.job_status import cancel_requested, clear_job_status, write_job_status
 
 
 logger = logging.getLogger(__name__)
@@ -79,8 +81,60 @@ PENDING_EMAILS: dict[int, PendingEmail] = {}
 OUTPUT_MODES: dict[int, str] = {}
 
 
-def _telegram_download_error_message(exc: BadRequest) -> str:
+class TelegramLocalFileError(RuntimeError):
+    """The local Bot API file path cannot be read from this host."""
+
+
+def _local_telegram_file_path(file_path: str) -> Path | None:
+    """Map a local Bot API path to its host-mounted counterpart safely.
+
+    Docker Desktop replaces ``:`` in Linux file names with U+F03A on Windows
+    bind mounts. Bot tokens contain a colon, so try both spellings before
+    declaring the local file unavailable.
+    """
+    try:
+        relative = PurePosixPath(file_path).relative_to(settings.telegram_local_file_root)
+    except ValueError:
+        relative = None
+
+    root = settings.telegram_local_file_host_root
+    candidates = [root.joinpath(*relative.parts)] if relative is not None else []
+    if relative is not None and ":" in file_path:
+        candidates.append(root.joinpath(*(part.replace(":", "\uf03a") for part in relative.parts)))
+    direct_match = next((path for path in candidates if path.is_file()), None)
+    if direct_match is not None:
+        return direct_match
+
+    # Some Docker Desktop releases alter more than just the colon in the Bot
+    # API's absolute path. The generated media filename is unique per bot, so
+    # fall back to finding that filename only inside the explicitly configured
+    # mounted directory. Never use a path supplied by Telegram outside it.
+    filename = PurePosixPath(file_path).name
+    if not filename:
+        return None
+    try:
+        matches = [path for path in root.rglob(filename) if path.is_file()]
+    except OSError:
+        return None
+    return max(matches, key=lambda path: path.stat().st_mtime_ns, default=None)
+
+
+async def _download_telegram_audio(telegram_file, target: Path) -> None:
+    if settings.telegram_local_mode and telegram_file.file_path:
+        source = _local_telegram_file_path(telegram_file.file_path)
+        if source is not None:
+            shutil.copyfile(source, target)
+            return
+        raise TelegramLocalFileError(
+            "Local Bot API returned a file path that is not available in the host-mounted directory."
+        )
+    await telegram_file.download_to_drive(custom_path=target)
+
+
+def _telegram_download_error_message(exc: BadRequest | TimedOut) -> str:
     """Return a safe, actionable message for Telegram download failures."""
+    if isinstance(exc, TimedOut):
+        return "Telegram 音檔下載逾時，請稍後重試。"
     if "file is too big" in str(exc).lower():
         return (
             "這個音檔超過 Telegram Bot 可下載的大小限制，無法開始轉錄。"
@@ -92,6 +146,9 @@ def _telegram_download_error_message(exc: BadRequest) -> str:
 
 def build_application(token: str) -> Application:
     builder = ApplicationBuilder().token(token)
+    builder.read_timeout(settings.telegram_request_timeout).media_write_timeout(
+        settings.telegram_request_timeout
+    )
     if settings.telegram_api_base_url:
         base = settings.telegram_api_base_url.rstrip("/")
         builder.base_url(f"{base}/bot").base_file_url(f"{base}/file/bot").local_mode(settings.telegram_local_mode)
@@ -245,26 +302,61 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
 
         paths = create_job_paths(settings.data_dir, suffix)
-        await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
-
-        telegram_file = await context.bot.get_file(media.file_id)
-        await telegram_file.download_to_drive(custom_path=paths.input_audio)
-
         create_meeting(
             settings.data_dir,
             MeetingRecord(
-                id=paths.job_id,
-                user_id=user.id,
-                source_platform="telegram",
-                audio_file_path=str(paths.input_audio),
-                normalized_audio_path=str(paths.normalized_audio),
-                transcript_txt_path=str(paths.transcript_txt),
-                transcript_docx_path=str(paths.transcript_docx),
+                id=paths.job_id, user_id=user.id, source_platform="telegram",
+                audio_file_path=str(paths.input_audio), normalized_audio_path=str(paths.normalized_audio),
+                transcript_txt_path=str(paths.transcript_txt), transcript_docx_path=str(paths.transcript_docx),
             ),
         )
+        write_job_status(settings.data_dir, paths.job_id, source="telegram", step="downloading", pct=0,
+                         label="downloading (從 Telegram 下載音檔)")
+        await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
 
+        telegram_file = await context.bot.get_file(media.file_id)
+        await _download_telegram_audio(telegram_file, paths.input_audio)
+        if cancel_requested(settings.data_dir, paths.job_id):
+            raise asyncio.CancelledError
+        write_job_status(settings.data_dir, paths.job_id, source="telegram", step="normalizing", pct=5,
+                         label="normalizing (音檔標準化)")
         normalize_audio(paths.input_audio, paths.normalized_audio)
-        segments = transcribe_audio_smart(paths.normalized_audio)
+        if cancel_requested(settings.data_dir, paths.job_id):
+            raise asyncio.CancelledError
+        duration = get_audio_duration(paths.normalized_audio)
+        write_job_status(settings.data_dir, paths.job_id, source="telegram", step="transcribing", pct=20,
+                         label="transcribing (語音辨識)")
+        last_transcription_pct = 20
+
+        def _progress(value: float, marker: float) -> None:
+            nonlocal last_transcription_pct
+            if marker == -999.0:
+                pct = min(80, max(25, int(value)))
+                label = "transcribing (分段語音辨識)"
+            elif value >= 0 and duration > 0:
+                # Single-file Whisper reports the end timestamp of each segment.
+                # Map that audio-time progress into the 20–80% transcription range.
+                pct = min(80, max(20, 20 + int((value / duration) * 60)))
+                label = "transcribing (語音辨識)"
+            else:
+                return
+
+            if pct > last_transcription_pct:
+                last_transcription_pct = pct
+                write_job_status(settings.data_dir, paths.job_id, source="telegram", step="transcribing", pct=pct,
+                                 label=label)
+
+        def _chunk_label(completed: int, total: int) -> None:
+            write_job_status(settings.data_dir, paths.job_id, source="telegram", step="transcribing",
+                             pct=min(80, 20 + int(completed / total * 60)),
+                             label=f"transcribing (分段語音辨識 {completed}/{total})")
+
+        segments = transcribe_audio_smart(paths.normalized_audio, progress_callback=_progress,
+                                          chunk_label_callback=_chunk_label)
+        if cancel_requested(settings.data_dir, paths.job_id):
+            raise asyncio.CancelledError
+        write_job_status(settings.data_dir, paths.job_id, source="telegram", step="polishing", pct=82,
+                         label="polishing (潤稿整理)")
         normalized_segments = normalize_speaker_labels(segments)
         save_transcript_segments(settings.data_dir, paths.job_id, normalized_segments)
 
@@ -272,6 +364,7 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         polished_text = polish_transcript(raw_text) if settings.enable_polish else polish_local_transcript(raw_text)
         polished_text = polish_local_transcript(polished_text)
         update_meeting_transcript_text(settings.data_dir, paths.job_id, polished_text)
+        clear_job_status(settings.data_dir, paths.job_id)
         displayed_text = (
             render_raw_transcript(normalized_segments)
             if _output_mode(user.id) == "raw"
@@ -284,9 +377,25 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"會議 ID：{paths.job_id}\n\n{_preview_text(displayed_text)}\n\n請選擇要輸出的檔案：",
             reply_markup=_export_keyboard(paths.job_id),
         )
-    except BadRequest as exc:
+    except asyncio.CancelledError:
+        _delete_meeting_files(settings.data_dir, paths.job_id)
+        delete_meeting(settings.data_dir, paths.job_id, user.id)
+        clear_job_status(settings.data_dir, paths.job_id)
+        await message.reply_text("已依 Web 工作台的要求終止這次轉錄。")
+    except TelegramLocalFileError:
+        logger.exception("Local Telegram Bot API file was not available on the host")
+        _delete_meeting_files(settings.data_dir, paths.job_id)
+        delete_meeting(settings.data_dir, paths.job_id, user.id)
+        clear_job_status(settings.data_dir, paths.job_id)
+        await message.reply_text(
+            "本機 Telegram 大檔服務尚未取得這個音檔，請稍後重試。"
+            "若持續發生，請確認本機 Bot API 容器與 data/telegram-bot-api 掛載正常。"
+        )
+    except (BadRequest, TimedOut) as exc:
         logger.warning("Telegram audio download failed: %s", exc)
         _delete_meeting_files(settings.data_dir, paths.job_id)
+        delete_meeting(settings.data_dir, paths.job_id, user.id)
+        clear_job_status(settings.data_dir, paths.job_id)
         await message.reply_text(_telegram_download_error_message(exc))
     except AudioProcessingError as exc:
         await message.reply_text(str(exc))
@@ -311,6 +420,8 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await message.reply_text("OpenAI API 暫時達到速率限制，請稍後再試。")
     except Exception:
         logger.exception("Failed to process audio message")
+        if 'paths' in locals():
+            clear_job_status(settings.data_dir, paths.job_id)
         await message.reply_text("處理失敗，請稍後再試，或改傳較短的音檔。")
 
 

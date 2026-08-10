@@ -56,6 +56,28 @@ DATA_DIR=./data
 MAX_AUDIO_MB=50
 ```
 
+### Telegram 長音檔（選用本機 Bot API）
+
+Telegram 官方雲端 Bot API 可能拒絕 Bot 下載較大的檔案，即使檔案本身可傳到聊天室。需要處理長錄音時，先啟動專案提供的本機 Bot API；它會把 Telegram 檔案存到本機掛載目錄，Bot 隨後直接讀取該檔案：
+
+```powershell
+docker compose -p meetingtranscript -f docker-compose.telegram-api.yml up -d
+```
+
+再在 `.env` 設定：
+
+```env
+TELEGRAM_API_ID=你的_api_id
+TELEGRAM_API_HASH=你的_api_hash
+TELEGRAM_API_BASE_URL=http://127.0.0.1:8081
+TELEGRAM_LOCAL_MODE=true
+TELEGRAM_LOCAL_FILE_ROOT=/var/lib/telegram-bot-api
+TELEGRAM_LOCAL_FILE_HOST_ROOT=./data/telegram-bot-api
+TELEGRAM_REQUEST_TIMEOUT=600
+```
+
+在 Windows + Docker Desktop，Bot Token 目錄中的冒號會由掛載層改寫；程式已自動處理這個路徑差異。設定後重啟 Telegram Bot。長檔下載完成後，既有的切段轉錄會自動接手。
+
 請勿提交 `.env`、API Key、Token、音檔或 `data/` 資料夾。
 
 若會議常出現品牌、產品名、站名或人名，可加上以逗號分隔的 Deepgram 專有名詞提示，協助模型保留正確拼寫：
