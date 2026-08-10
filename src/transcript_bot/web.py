@@ -56,6 +56,32 @@ _job_queue: "collections.deque[str]" = collections.deque()
 _job_lock = threading.Lock()
 _running_count = 0  # number of currently running transcription threads
 
+_TELEGRAM_STATUS_LABELS = {
+    "running": "運行中",
+    "starting": "啟動中",
+    "disabled": "未啟用",
+    "error": "錯誤",
+    "unknown": "狀態未知",
+}
+
+
+def get_telegram_bot_status(data_dir: Path) -> dict[str, str]:
+    """Read the watchdog's credential-free Telegram worker status file."""
+    fallback = {"state": "unknown", "label": _TELEGRAM_STATUS_LABELS["unknown"], "message": "尚未收到 watchdog 狀態。", "updated_at": ""}
+    try:
+        raw = json.loads((data_dir / "telegram_bot_status.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return fallback
+    state = str(raw.get("state", "unknown"))
+    if state not in _TELEGRAM_STATUS_LABELS:
+        state = "unknown"
+    return {
+        "state": state,
+        "label": _TELEGRAM_STATUS_LABELS[state],
+        "message": str(raw.get("message", ""))[:160],
+        "updated_at": str(raw.get("updated_at", ""))[:64],
+    }
+
 
 def create_web_app(data_dir: Path | None = None) -> Flask:
     """Create a correction interface intended exclusively for this computer."""
@@ -90,7 +116,12 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
             cancelled=request.args.get("cancelled") == "1",
             active_jobs=_active_jobs,
             job_progress=_job_progress,
+            telegram_status=get_telegram_bot_status(app.config["DATA_DIR"]),
         )
+
+    @app.get("/api/telegram/status")
+    def telegram_status():
+        return jsonify(get_telegram_bot_status(app.config["DATA_DIR"]))
 
     @app.post("/upload")
     def upload_audio():
@@ -166,6 +197,12 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
         meeting = get_local_meeting_export(app.config["DATA_DIR"], meeting_id)
         if not meeting:
             abort(404)
+        if _repair_overlong_segments(app.config["DATA_DIR"], meeting):
+            # Refresh the cached record so the page and downloads use the same
+            # repaired, bounded rows.
+            meeting = get_local_meeting_export(app.config["DATA_DIR"], meeting_id)
+            if not meeting:
+                abort(404)
 
         def render_editor(*, error: str | None = None):
             aliases = get_speaker_aliases(app.config["DATA_DIR"], meeting.id, meeting.user_id)
@@ -468,7 +505,10 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         # Reuse it rather than exposing a second, potentially different ASR
         # segmentation for the same audio.
         existing_meeting = find_matching_local_meeting(
-            Path(data_dir), paths.normalized_audio, exclude_meeting_id=job_id
+            Path(data_dir),
+            paths.normalized_audio,
+            exclude_meeting_id=job_id,
+            expected_duration=duration,
         )
         if existing_meeting:
             _job_progress[job_id] = {
@@ -478,8 +518,9 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
             }
             segments = get_meeting_segments(Path(data_dir), existing_meeting.id, existing_meeting.user_id)
             if segments:
+                segments = split_segments_by_sentences(segments)
                 save_transcript_segments(data_dir, job_id, segments)
-                update_meeting_transcript_text(data_dir, job_id, existing_meeting.transcript_text)
+                update_meeting_transcript_text(data_dir, job_id, render_plain_transcript(segments))
                 update_meeting_summary_text(data_dir, job_id, existing_meeting.summary_text)
                 update_meeting_metadata(data_dir, job_id, Path(original_filename).stem[:160], "")
                 _job_progress[job_id] = {"step": "done", "pct": 100, "label": "done (完成)"}
@@ -551,9 +592,15 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
                 "Ollama 潤稿失敗，降級為本地規則清理並保留原始逐字稿 job=%s", job_id)
             transcript_text = polish_local_transcript(raw_text)
         _job_progress[job_id] = {"step": "saving", "pct": 86, "label": "saving (儲存中)"}
+        # Keep the timeline aligned with the polished text.  A polish response
+        # must never turn one row into an unbounded paragraph in the editor.
+        segments = split_segments_by_sentences(
+            _sync_polished_segments(transcript_text, segments)
+        )
+        save_transcript_segments(data_dir, job_id, segments)
+        # Use the same bounded rows for downloads, summaries, and the editor.
+        transcript_text = render_plain_transcript(segments)
         update_meeting_transcript_text(data_dir, job_id, transcript_text)
-        # Sync polished text back to individual segments so the editor shows punctuation.
-        _sync_polished_segments(data_dir, job_id, transcript_text, segments)
         update_meeting_metadata(data_dir, job_id, Path(original_filename).stem[:160], "")
 
         # Step 4: Summary (88 → 94%)
@@ -584,20 +631,58 @@ def _restore_speaker_labels(text: str, aliases: dict[str, str]) -> str:
     return text
 
 
-def _sync_polished_segments(data_dir: str, meeting_id: str, transcript_text: str, segments: list) -> None:
-    """Parse polished transcript_text back into per-speaker blocks and update DB segments."""
+def _sync_polished_segments(transcript_text: str, segments: list) -> list:
+    """Map polished rows to source rows in order, while retaining their timestamps.
+
+    Matching only by speaker used to repeatedly overwrite that speaker's first
+    segment.  The editor would then show an occasional huge paragraph followed
+    by the untouched short rows.  Each speaker now consumes source rows in the
+    order in which they occur.
+    """
     import re as _re
-    blocks = _re.split(r"\n\n+", transcript_text)
-    for block in blocks:
-        match = _re.match(r"^(Speaker\s+\d+)[：:]\s*(.+)", block.strip(), _re.IGNORECASE | _re.DOTALL)
+
+    source_positions: dict[str, collections.deque[int]] = {}
+    for index, segment in enumerate(segments):
+        source_positions.setdefault(segment.speaker.lower(), collections.deque()).append(index)
+
+    synced = list(segments)
+    for line in transcript_text.splitlines():
+        match = _re.match(r"^(Speaker\s+\d+)[：:]\s*(.+)$", line.strip(), _re.IGNORECASE | _re.DOTALL)
         if not match:
             continue
-        speaker_label = match.group(1)
-        polished_text = match.group(2).strip()
-        for i, seg in enumerate(segments, start=1):
-            if seg.speaker == speaker_label:
-                update_transcript_segment_text(data_dir, meeting_id, 0, i, polished_text)
-                break
+        speaker_label, polished_text = match.groups()
+        positions = source_positions.get(speaker_label.lower())
+        if not positions:
+            continue
+        source_index = positions.popleft()
+        source = segments[source_index]
+        synced[source_index] = type(source)(
+            speaker=source.speaker,
+            start=source.start,
+            end=source.end,
+            text=polished_text.strip(),
+        )
+
+    return synced
+
+
+def _repair_overlong_segments(data_dir: Path, meeting) -> bool:
+    """Upgrade legacy or reused rows that predate the bounded-display rule."""
+    segments = get_meeting_segments(data_dir, meeting.id, meeting.user_id)
+    bounded_segments = split_segments_by_sentences(segments)
+    if len(bounded_segments) == len(segments) and all(
+        bounded.text == original.text
+        and bounded.start == original.start
+        and bounded.end == original.end
+        for bounded, original in zip(bounded_segments, segments)
+    ):
+        return False
+
+    save_transcript_segments(data_dir, meeting.id, bounded_segments)
+    update_meeting_transcript_text(
+        data_dir, meeting.id, render_plain_transcript(bounded_segments), preserve_summary=True
+    )
+    return True
 
 
 def _delete_local_meeting_files(data_dir: Path, meeting_id: str) -> None:

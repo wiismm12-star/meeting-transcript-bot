@@ -12,6 +12,7 @@ from unittest.mock import patch
 import transcript_bot.web as web
 from transcript_bot.config import settings
 from transcript_bot.database import init_database
+from transcript_bot.formatting import MeetingSummary
 from transcript_bot.transcription import TranscriptSegment
 
 # Module-level coordination events so a prior test's lingering threads can always
@@ -93,6 +94,20 @@ class ConcurrencyLimitTests(unittest.TestCase):
         stack.enter_context(patch("transcript_bot.web.get_audio_duration", return_value=10.0))
         stack.enter_context(
             patch("transcript_bot.web.transcribe_audio_smart", _fake_transcribe)
+        )
+        # The test is about queue promotion, not Ollama or summary latency.
+        # Keep the worker fully local and deterministic after transcription.
+        stack.enter_context(
+            patch("transcript_bot.web.polish_transcript", side_effect=lambda text: text)
+        )
+        stack.enter_context(
+            patch("transcript_bot.web.polish_local_transcript", side_effect=lambda text: text)
+        )
+        stack.enter_context(
+            patch(
+                "transcript_bot.web._generate_meeting_summary",
+                return_value=MeetingSummary("測試會議", "", []),
+            )
         )
         return stack
 

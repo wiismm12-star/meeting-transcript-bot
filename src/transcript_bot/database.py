@@ -310,7 +310,11 @@ def get_local_meeting_audio_path(data_dir: Path, meeting_id: str) -> Path | None
 
 
 def find_matching_local_meeting(
-    data_dir: Path, normalized_audio_path: Path, *, exclude_meeting_id: str
+    data_dir: Path,
+    normalized_audio_path: Path,
+    *,
+    exclude_meeting_id: str,
+    expected_duration: float | None = None,
 ) -> MeetingExportRecord | None:
     """Return an earlier completed local meeting with byte-identical audio.
 
@@ -338,16 +342,30 @@ def find_matching_local_meeting(
             (exclude_meeting_id,),
         ).fetchall()
 
+    matches: list[tuple[float, MeetingExportRecord]] = []
     for row in rows:
         candidate_path = get_local_meeting_audio_path(data_dir, str(row["id"]))
         if not candidate_path:
             continue
         try:
             if _file_sha256(candidate_path) == target_hash:
-                return _meeting_export_from_row(row)
+                with _connect(data_dir) as conn:
+                    coverage_row = conn.execute(
+                        "SELECT MAX(end_time) AS max_end FROM transcript_segments WHERE meeting_id = ?",
+                        (str(row["id"]),),
+                    ).fetchone()
+                coverage = float(coverage_row["max_end"] or 0.0)
+                # Never reuse a partial transcript for a complete recording.
+                # A small tolerance covers encoders that report a little tail
+                # padding after the final spoken segment.
+                if expected_duration and coverage < expected_duration * 0.98:
+                    continue
+                meeting = _meeting_export_from_row(row)
+                if meeting:
+                    matches.append((coverage, meeting))
         except OSError:
             continue
-    return None
+    return max(matches, key=lambda item: item[0])[1] if matches else None
 
 
 def _file_sha256(path: Path) -> str:

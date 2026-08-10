@@ -2,7 +2,7 @@
 {% block title %}本機逐字稿校稿{% endblock %}
 {% block content %}
   <section class="home-hero">
-    <div><p class="eyebrow">LOCAL MEETING WORKBENCH</p><h1>本機逐字稿校稿</h1><p class="hero-copy">上傳錄音、校對逐字稿，將每一場會議整理成可閱讀的紀錄。</p><p class="local-badge"><span>●</span> 僅限本機使用 · 127.0.0.1</p></div>
+    <div><p class="eyebrow">LOCAL MEETING WORKBENCH</p><h1>本機逐字稿校稿</h1><p class="hero-copy">上傳錄音、校對逐字稿，將每一場會議整理成可閱讀的紀錄。</p><p class="local-badge"><span>●</span> 僅限本機使用 · 127.0.0.1</p><p id="telegram-status" class="telegram-badge {{ telegram_status.state }}"><span>●</span> Telegram Bot · <strong>{{ telegram_status.label }}</strong><small>{{ telegram_status.message }}</small></p></div>
     <div class="hero-mark" aria-hidden="true"><span>〰</span><i></i><i></i><i></i></div>
   </section>
   {% if upload_error %}<p class="error">{{ upload_error }}</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if deleted_count %}<p class="notice">已刪除 {{ deleted_count }} 場會議。</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if cancelled %}<p class="notice">已終止轉錄，音檔已釋放。</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if request.args.get('uploaded') %}<p class="notice">音檔已上傳，正在背景轉錄中…</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}
@@ -55,6 +55,9 @@
   {% endif %}
 
   <script>
+    const telegramStatus=document.getElementById('telegram-status');
+    const refreshTelegramStatus=()=>fetch('/api/telegram/status').then(response=>response.json()).then(status=>{telegramStatus.className='telegram-badge '+status.state;telegramStatus.innerHTML='<span>●</span> Telegram Bot · <strong>'+status.label+'</strong><small>'+status.message+'</small>';}).catch(()=>{});
+    setInterval(refreshTelegramStatus,5000);
     {# ── Bulk select/deselect for completed meetings only ── #}
     const selections=[...document.querySelectorAll('.meeting-select')],selectAll=document.getElementById('select-all-meetings'),count=document.getElementById('selected-count');
     if(selectAll){

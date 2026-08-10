@@ -9,6 +9,7 @@ from pathlib import Path
 from openai import RateLimitError
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -78,8 +79,23 @@ PENDING_EMAILS: dict[int, PendingEmail] = {}
 OUTPUT_MODES: dict[int, str] = {}
 
 
+def _telegram_download_error_message(exc: BadRequest) -> str:
+    """Return a safe, actionable message for Telegram download failures."""
+    if "file is too big" in str(exc).lower():
+        return (
+            "這個音檔超過 Telegram Bot 可下載的大小限制，無法開始轉錄。"
+            "請改傳 20–30 秒測試片段、壓縮或切成較短音檔，"
+            "或改用本機 Web 工作台上傳。"
+        )
+    return "無法從 Telegram 下載這個音檔，請稍後重試或改用本機 Web 工作台上傳。"
+
+
 def build_application(token: str) -> Application:
-    app = ApplicationBuilder().token(token).build()
+    builder = ApplicationBuilder().token(token)
+    if settings.telegram_api_base_url:
+        base = settings.telegram_api_base_url.rstrip("/")
+        builder.base_url(f"{base}/bot").base_file_url(f"{base}/file/bot").local_mode(settings.telegram_local_mode)
+    app = builder.build()
     app.add_handler(CallbackQueryHandler(handle_export_choice, pattern=r"^export:"))
     app.add_handler(CallbackQueryHandler(handle_speaker_name_action, pattern=r"^speaker:"))
     app.add_handler(CallbackQueryHandler(handle_email_action, pattern=r"^email:"))
@@ -229,6 +245,11 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
 
         paths = create_job_paths(settings.data_dir, suffix)
+        await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
+
+        telegram_file = await context.bot.get_file(media.file_id)
+        await telegram_file.download_to_drive(custom_path=paths.input_audio)
+
         create_meeting(
             settings.data_dir,
             MeetingRecord(
@@ -241,10 +262,6 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 transcript_docx_path=str(paths.transcript_docx),
             ),
         )
-        await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
-
-        telegram_file = await context.bot.get_file(media.file_id)
-        await telegram_file.download_to_drive(custom_path=paths.input_audio)
 
         normalize_audio(paths.input_audio, paths.normalized_audio)
         segments = transcribe_audio_smart(paths.normalized_audio)
@@ -267,6 +284,10 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"會議 ID：{paths.job_id}\n\n{_preview_text(displayed_text)}\n\n請選擇要輸出的檔案：",
             reply_markup=_export_keyboard(paths.job_id),
         )
+    except BadRequest as exc:
+        logger.warning("Telegram audio download failed: %s", exc)
+        _delete_meeting_files(settings.data_dir, paths.job_id)
+        await message.reply_text(_telegram_download_error_message(exc))
     except AudioProcessingError as exc:
         await message.reply_text(str(exc))
     except DeepgramError as exc:

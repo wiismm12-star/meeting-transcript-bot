@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from io import BytesIO
@@ -10,13 +11,15 @@ from transcript_bot.database import (
     MeetingRecord,
     create_meeting,
     get_local_meeting_export,
+    get_meeting_segments,
     init_database,
     get_speaker_aliases,
     update_meeting_transcript_text,
 )
 from transcript_bot.transcription import TranscriptSegment
 from transcript_bot.database import save_transcript_segments
-from transcript_bot.web import create_web_app
+from transcript_bot.web import _sync_polished_segments, create_web_app
+from transcript_bot.formatting import split_segments_by_sentences
 
 
 class LocalWebCorrectionTests(unittest.TestCase):
@@ -55,6 +58,27 @@ class LocalWebCorrectionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(self.meeting_id.encode(), response.data)
         self.assertIn("新增一場會議".encode(), response.data)
+
+    def test_index_and_api_show_telegram_bot_status_without_secrets(self) -> None:
+        (self.data_dir / "telegram_bot_status.json").write_text(
+            json.dumps(
+                {
+                    "state": "running",
+                    "message": "Polling 已啟用，等待 Telegram 訊息。",
+                    "updated_at": "2026-08-10T12:00:00+08:00",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        page = self.client.get("/")
+        api = self.client.get("/api/telegram/status")
+
+        self.assertIn("Telegram Bot ·".encode(), page.data)
+        self.assertIn("運行中".encode(), page.data)
+        self.assertEqual(api.get_json()["state"], "running")
+        self.assertNotIn(b"not-inspected", page.data)
 
     def test_recent_meeting_card_is_not_a_navigation_target(self) -> None:
         response = self.client.get("/")
@@ -105,6 +129,52 @@ class LocalWebCorrectionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         assert meeting is not None
         self.assertEqual(meeting.transcript_text, "Speaker 1：直接修改的內容")
+
+    def test_polished_rows_keep_their_matching_same_speaker_timeline_rows(self) -> None:
+        source = [
+            TranscriptSegment("Speaker 1", 0, 5, "第一段原文"),
+            TranscriptSegment("Speaker 2", 5, 10, "第二段原文"),
+            TranscriptSegment("Speaker 1", 10, 15, "第三段原文"),
+        ]
+        polished = "\n\n".join(
+            [
+                "Speaker 1：第一段潤稿",
+                "Speaker 2：第二段潤稿",
+                "Speaker 1：第三段潤稿",
+            ]
+        )
+
+        synced = _sync_polished_segments(polished, source)
+
+        self.assertEqual([segment.text for segment in synced], ["第一段潤稿", "第二段潤稿", "第三段潤稿"])
+        self.assertEqual([(segment.start, segment.end) for segment in synced], [(0, 5), (5, 10), (10, 15)])
+
+    def test_polished_long_row_is_split_before_display(self) -> None:
+        source = [TranscriptSegment("Speaker 1", 0, 30, "原始內容")]
+        polished = "Speaker 1：" + ("這是一段很長的潤稿內容，" * 20)
+
+        synced = _sync_polished_segments(polished, source)
+        display_rows = split_segments_by_sentences(synced)
+
+        self.assertGreater(len(display_rows), 1)
+        self.assertTrue(all(len(segment.text) <= 110 for segment in display_rows))
+        self.assertEqual("".join(segment.text for segment in display_rows), synced[0].text)
+
+    def test_opening_a_legacy_meeting_repairs_its_overlong_rows(self) -> None:
+        long_text = "這是一段舊逐字稿的長句，" * 20
+        save_transcript_segments(
+            self.data_dir,
+            self.meeting_id,
+            [TranscriptSegment("Speaker 1", 0, 30, long_text)],
+        )
+        update_meeting_transcript_text(self.data_dir, self.meeting_id, f"Speaker 1：{long_text}")
+
+        response = self.client.get(f"/meetings/{self.meeting_id}")
+        repaired = get_meeting_segments(self.data_dir, self.meeting_id, 1001)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertGreater(len(repaired), 1)
+        self.assertTrue(all(len(segment.text) <= 110 for segment in repaired))
 
     def test_delete_meeting_removes_the_local_record(self) -> None:
         response = self.client.post(f"/meetings/{self.meeting_id}/delete", follow_redirects=True)

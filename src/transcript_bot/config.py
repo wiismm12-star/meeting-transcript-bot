@@ -5,6 +5,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     telegram_bot_token: str = ""
+    telegram_api_id: int | None = None
+    telegram_api_hash: str = ""
+    telegram_api_base_url: str = ""
+    telegram_local_mode: bool = False
     openai_api_key: str = ""
     deepgram_api_key: str = ""
     deepgram_keyterms: str = ""

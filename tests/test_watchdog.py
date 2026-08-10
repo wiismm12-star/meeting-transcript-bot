@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -47,6 +48,22 @@ class WatchdogTests(unittest.TestCase):
         with patch.object(watchdog.subprocess, "run") as run:
             watchdog.kill_stale()
         self.assertEqual(run.call_args.kwargs["creationflags"], watchdog._CREATE_NO_WINDOW)
+
+    def test_telegram_status_uses_configured_data_directory_without_credentials(self) -> None:
+        watchdog = _load_watchdog_module()
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".env").write_text(
+                "TELEGRAM_BOT_TOKEN=not-inspected\nDATA_DIR=runtime-data\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(watchdog.telegram_configured(root))
+            watchdog.write_telegram_status("running", "Polling 已啟用。", root)
+            status_path = root / "runtime-data" / "telegram_bot_status.json"
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(status["state"], "running")
+        self.assertEqual(status["message"], "Polling 已啟用。")
 
 
 if __name__ == "__main__":
