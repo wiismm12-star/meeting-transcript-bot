@@ -351,22 +351,59 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 transcript_txt_path=str(paths.transcript_txt), transcript_docx_path=str(paths.transcript_docx),
             ),
         )
-        write_job_status(settings.data_dir, paths.job_id, source="telegram", step="downloading", pct=0,
-                         label="downloading (從 Telegram 下載音檔)")
+        progress_notice = await message.reply_text("處理進度：0%\n目前階段：從 Telegram 下載音檔")
+        loop = asyncio.get_running_loop()
+        last_pushed_pct = -10
+        last_pushed_step = ""
+
+        def _progress_text(step: str, pct: int) -> str:
+            labels = {
+                "downloading": "從 Telegram 下載音檔",
+                "normalizing": "音檔標準化",
+                "transcribing": "語音辨識",
+                "polishing": "潤稿整理",
+                "summarizing": "整理會議摘要",
+                "completed": "處理完成",
+            }
+            return f"處理進度：{pct}%\n目前階段：{labels.get(step, '處理中')}"
+
+        async def _edit_progress(step: str, pct: int) -> None:
+            if not hasattr(progress_notice, "edit_text"):
+                return
+            try:
+                await progress_notice.edit_text(_progress_text(step, pct))
+            except (BadRequest, TimedOut):
+                logger.debug("Unable to update Telegram progress message", exc_info=True)
+
+        def _schedule_progress(step: str, pct: int) -> None:
+            nonlocal last_pushed_pct, last_pushed_step
+            # A stage change is always useful; during transcription, limit
+            # updates to 10% increments to stay well below Telegram rate limits.
+            if step == last_pushed_step and pct < last_pushed_pct + 10:
+                return
+            last_pushed_step = step
+            last_pushed_pct = pct
+            asyncio.create_task(_edit_progress(step, pct))
+
+        def _set_progress(step: str, pct: int, label: str) -> None:
+            write_job_status(settings.data_dir, paths.job_id, source="telegram", step=step, pct=pct, label=label)
+            # Callbacks from the transcription worker run in a background
+            # thread, so hand Telegram I/O back to the application's event loop.
+            loop.call_soon_threadsafe(_schedule_progress, step, pct)
+
+        _set_progress("downloading", 0, "downloading (從 Telegram 下載音檔)")
         await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.UPLOAD_DOCUMENT)
 
         telegram_file = await context.bot.get_file(media.file_id)
         await _download_telegram_audio(telegram_file, paths.input_audio)
         if cancel_requested(settings.data_dir, paths.job_id):
             raise asyncio.CancelledError
-        write_job_status(settings.data_dir, paths.job_id, source="telegram", step="normalizing", pct=5,
-                         label="normalizing (音檔標準化)")
+        _set_progress("normalizing", 5, "normalizing (音檔標準化)")
         normalize_audio(paths.input_audio, paths.normalized_audio)
         if cancel_requested(settings.data_dir, paths.job_id):
             raise asyncio.CancelledError
         duration = get_audio_duration(paths.normalized_audio)
-        write_job_status(settings.data_dir, paths.job_id, source="telegram", step="transcribing", pct=20,
-                         label="transcribing (語音辨識)")
+        _set_progress("transcribing", 20, "transcribing (語音辨識)")
         last_transcription_pct = 20
 
         def _progress(value: float, marker: float) -> None:
@@ -384,20 +421,23 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
             if pct > last_transcription_pct:
                 last_transcription_pct = pct
-                write_job_status(settings.data_dir, paths.job_id, source="telegram", step="transcribing", pct=pct,
-                                 label=label)
+                _set_progress("transcribing", pct, label)
 
         def _chunk_label(completed: int, total: int) -> None:
-            write_job_status(settings.data_dir, paths.job_id, source="telegram", step="transcribing",
-                             pct=min(80, 20 + int(completed / total * 60)),
-                             label=f"transcribing (分段語音辨識 {completed}/{total})")
+            _set_progress(
+                "transcribing", min(80, 20 + int(completed / total * 60)),
+                f"transcribing (分段語音辨識 {completed}/{total})",
+            )
 
-        segments = transcribe_audio_smart(paths.normalized_audio, progress_callback=_progress,
-                                          chunk_label_callback=_chunk_label)
+        segments = await asyncio.to_thread(
+            transcribe_audio_smart,
+            paths.normalized_audio,
+            progress_callback=_progress,
+            chunk_label_callback=_chunk_label,
+        )
         if cancel_requested(settings.data_dir, paths.job_id):
             raise asyncio.CancelledError
-        write_job_status(settings.data_dir, paths.job_id, source="telegram", step="polishing", pct=82,
-                         label="polishing (潤稿整理)")
+        _set_progress("polishing", 82, "polishing (潤稿整理)")
         normalized_segments = normalize_speaker_labels(segments)
         save_transcript_segments(settings.data_dir, paths.job_id, normalized_segments)
 
@@ -409,11 +449,10 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         update_meeting_metadata(settings.data_dir, paths.job_id, meeting_title, "")
         if cancel_requested(settings.data_dir, paths.job_id):
             raise asyncio.CancelledError
-        write_job_status(settings.data_dir, paths.job_id, source="telegram", step="summarizing", pct=90,
-                         label="summarizing (會議摘要)")
-        await message.reply_text("逐字稿已完成，正在整理會議摘要。")
+        _set_progress("summarizing", 90, "summarizing (會議摘要)")
         summary = await asyncio.to_thread(_generate_meeting_summary, polished_text, meeting_title)
         update_meeting_summary_text(settings.data_dir, paths.job_id, _serialize_summary(summary))
+        await _edit_progress("completed", 100)
         clear_job_status(settings.data_dir, paths.job_id)
         displayed_text = (
             render_raw_transcript(normalized_segments)

@@ -128,6 +128,10 @@ class TelegramWebLifecycleTests(unittest.IsolatedAsyncioTestCase):
             init_database(data_dir)
             replies: list[str] = []
 
+            class FakeProgressMessage:
+                async def edit_text(self, text, **_kwargs):
+                    replies.append(text)
+
             class FakeMessage:
                 chat_id = 123
                 voice = None
@@ -136,6 +140,7 @@ class TelegramWebLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
                 async def reply_text(self, text, **_kwargs):
                     replies.append(text)
+                    return FakeProgressMessage()
 
             class FakeBot:
                 async def send_chat_action(self, **_kwargs):
@@ -166,7 +171,8 @@ class TelegramWebLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(meeting)
             self.assertEqual(meeting.title, "董事會")
             self.assertIn("確認後續安排", meeting.summary_text)
-            self.assertTrue(any("正在整理會議摘要" in reply for reply in replies))
+            self.assertTrue(any("目前階段：整理會議摘要" in reply for reply in replies))
+            self.assertTrue(any("處理進度：100%" in reply for reply in replies))
             self.assertTrue(any("會議摘要：董事會" in reply for reply in replies))
 
     async def test_telegram_job_is_visible_then_web_cancel_stops_and_cleans_it(self) -> None:
