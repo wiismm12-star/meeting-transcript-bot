@@ -34,6 +34,13 @@ class MeetingSummary:
 
 
 def normalize_speaker_labels(segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
+    """Give source speaker ids stable display labels without losing turn boundaries.
+
+    Providers such as Deepgram return short utterances even when one person
+    speaks continuously.  Those timestamps are what the web editor uses for
+    readable rows and audio seeking, so adjacent same-speaker utterances must
+    remain separate.
+    """
     speaker_map: OrderedDict[str, str] = OrderedDict()
     normalized: list[TranscriptSegment] = []
 
@@ -49,22 +56,7 @@ def normalize_speaker_labels(segments: list[TranscriptSegment]) -> list[Transcri
             )
         )
 
-    return merge_adjacent_segments(normalized)
-
-
-def merge_adjacent_segments(segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
-    if not segments:
-        return []
-
-    merged: list[TranscriptSegment] = [segments[0]]
-    for segment in segments[1:]:
-        previous = merged[-1]
-        if previous.speaker == segment.speaker:
-            previous.text = clean_text(f"{previous.text} {segment.text}")
-            previous.end = segment.end
-        else:
-            merged.append(segment)
-    return merged
+    return normalized
 
 
 def apply_speaker_aliases(text: str, aliases: dict[str, str]) -> str:
@@ -249,45 +241,33 @@ def _normalize_speaker_colon(line: str) -> str:
     return line
 
 
-_SENTENCE_END = re.compile(r"[。！？\n]+")
+_SENTENCE_CHUNK = re.compile(r".+?(?:[。！？；\n]+|$)", re.DOTALL)
+_DISPLAY_SEGMENT_MAX_CHARS = 110
 
 
 def split_segments_by_sentences(segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
-    """Break long segments into sentence-level chunks (~1-2 lines each).
-
-    Each segment is split on sentence-ending punctuation (。！？) and newlines.
-    Timestamps are interpolated evenly within the original segment's time window.
-    Speaker labels are preserved. Segments shorter than ~60 characters are kept as-is
-    to avoid over-fragmenting very short utterances.
-    """
+    """Break long turns into readable 1–2 line chunks without dropping punctuation."""
     result: list[TranscriptSegment] = []
     for seg in segments:
         text = seg.text.strip()
-        if len(text) <= 60:
+        if len(text) <= _DISPLAY_SEGMENT_MAX_CHARS:
             result.append(seg)
             continue
 
-        # Split on sentence boundaries, keep the delimiter with its sentence
-        parts = [p.strip() for p in _SENTENCE_END.split(text) if p.strip()]
-        if len(parts) <= 1:
-            result.append(seg)
-            continue
+        parts = _split_display_text(text)
 
-        # Filter out fragments that are just punctuation or whitespace
-        parts = [p for p in parts if len(p) >= 2]
-        if not parts:
-            result.append(seg)
-            continue
-
-        # Interpolate timestamps
+        # Assign time by relative text length so every displayed row still
+        # seeks to its own portion of the source audio.
         seg_start = seg.start or 0.0
         seg_end = seg.end or seg_start + 1.0
         duration = seg_end - seg_start
-        n = len(parts)
+        total_chars = max(sum(len(part) for part in parts), 1)
+        consumed_chars = 0
 
-        for i, part in enumerate(parts):
-            sub_start = seg_start + (duration * i / n)
-            sub_end = seg_start + (duration * (i + 1) / n)
+        for part in parts:
+            sub_start = seg_start + (duration * consumed_chars / total_chars)
+            consumed_chars += len(part)
+            sub_end = seg_start + (duration * consumed_chars / total_chars)
             result.append(
                 TranscriptSegment(
                     speaker=seg.speaker,
@@ -298,3 +278,41 @@ def split_segments_by_sentences(segments: list[TranscriptSegment]) -> list[Trans
             )
 
     return result
+
+
+def _split_display_text(text: str) -> list[str]:
+    """Prefer sentence/clause ends, with a safe hard limit for unpunctuated ASR."""
+    matches = list(_SENTENCE_CHUNK.finditer(text))
+    sentence_parts = [match.group().strip() for match in matches if match.group().strip()]
+    if not sentence_parts:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+    for sentence in sentence_parts:
+        if current and len(current) + len(sentence) > _DISPLAY_SEGMENT_MAX_CHARS:
+            chunks.extend(_split_long_display_piece(current))
+            current = ""
+        if len(sentence) > _DISPLAY_SEGMENT_MAX_CHARS:
+            chunks.extend(_split_long_display_piece(sentence))
+        else:
+            current += sentence
+    if current:
+        chunks.extend(_split_long_display_piece(current))
+    return [chunk for chunk in chunks if chunk]
+
+
+def _split_long_display_piece(text: str) -> list[str]:
+    chunks: list[str] = []
+    remaining = text.strip()
+    while len(remaining) > _DISPLAY_SEGMENT_MAX_CHARS:
+        window = remaining[:_DISPLAY_SEGMENT_MAX_CHARS]
+        break_at = max(window.rfind(mark) + 1 for mark in "，、 ")
+        # Do not create a very short first fragment just to use a comma.
+        if break_at < _DISPLAY_SEGMENT_MAX_CHARS // 2:
+            break_at = _DISPLAY_SEGMENT_MAX_CHARS
+        chunks.append(remaining[:break_at].strip())
+        remaining = remaining[break_at:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks

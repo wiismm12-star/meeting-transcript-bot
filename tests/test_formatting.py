@@ -10,6 +10,7 @@ from transcript_bot.formatting import (
     render_action_summary,
     render_meeting_minutes,
     render_raw_transcript,
+    split_segments_by_sentences,
     to_traditional,
 )
 from transcript_bot.transcription import TranscriptSegment
@@ -34,7 +35,7 @@ class FormattingTests(unittest.TestCase):
         )
         self.assertEqual(result, "Speaker 1：這個是測試")
 
-    def test_normalizes_and_merges_source_speaker_labels(self) -> None:
+    def test_normalizes_speaker_labels_without_merging_source_utterances(self) -> None:
         segments = normalize_speaker_labels(
             [
                 TranscriptSegment("42", 0, 1, "第一段"),
@@ -44,8 +45,26 @@ class FormattingTests(unittest.TestCase):
         )
         self.assertEqual(
             [(segment.speaker, segment.start, segment.end, segment.text) for segment in segments],
-            [("Speaker 1", 0, 2, "第一段第二段"), ("Speaker 2", 2, 3, "第三段")],
+            [
+                ("Speaker 1", 0, 1, "第一段"),
+                ("Speaker 1", 1, 2, "第二段"),
+                ("Speaker 2", 2, 3, "第三段"),
+            ],
         )
+
+    def test_splits_long_unpunctuated_turn_into_readable_chunks(self) -> None:
+        text = "這是一段沒有任何標點符號的長篇逐字稿" * 12
+        chunks = split_segments_by_sentences([TranscriptSegment("Speaker 1", 0, 24, text)])
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk.text) <= 110 for chunk in chunks))
+        self.assertEqual("".join(chunk.text for chunk in chunks), text)
+        self.assertEqual(chunks[0].start, 0)
+        self.assertEqual(chunks[-1].end, 24)
+
+    def test_splitting_keeps_sentence_punctuation(self) -> None:
+        text = ("第一句。第二句，仍是第二句。第三句！" * 8)
+        chunks = split_segments_by_sentences([TranscriptSegment("Speaker 1", 0, 24, text)])
+        self.assertEqual("".join(chunk.text for chunk in chunks), text)
 
     def test_applies_aliases_only_to_speaker_labels(self) -> None:
         text = "Speaker 1：主持人提到 Speaker 2。\n\nSpeaker 2：收到。"

@@ -8,6 +8,11 @@ from transcript_bot.config import settings
 from transcript_bot.transcription import TranscriptSegment
 
 
+# ffmpeg is a console application on Windows.  Prevent a transient console
+# window every time pyannote decodes an uploaded recording.
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 class PyannoteDiarizationError(RuntimeError):
     pass
 
@@ -82,6 +87,7 @@ def _load_audio_for_pyannote(audio_path: Path, torch):
         ],
         capture_output=True,
         check=False,
+        creationflags=_CREATE_NO_WINDOW,
     )
     if result.returncode != 0 or not result.stdout:
         raise PyannoteDiarizationError("無法將音檔載入 pyannote 進行語者分離。")

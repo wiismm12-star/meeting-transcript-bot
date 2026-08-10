@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
 
-from transcript_bot.audio import normalize_audio
+from transcript_bot.audio import _CREATE_NO_WINDOW, normalize_audio
 
 
 class AudioNormalizationTests(unittest.TestCase):
@@ -25,6 +25,7 @@ class AudioNormalizationTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertNotIn("-ac", command)
         self.assertIn("-ar", command)
+        self.assertEqual(run.call_args.kwargs["creationflags"], _CREATE_NO_WINDOW)
 
 
 if __name__ == "__main__":

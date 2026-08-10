@@ -35,6 +35,9 @@ class AudioChunk:
 
 
 _SILENCE_NOISE_DB = "-30dB"
+# ``capture_output`` hides ffmpeg's text, but on Windows it does not stop a
+# console-mode executable from briefly creating its own black console window.
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def split_audio_at_silence(
@@ -84,7 +87,7 @@ def _detect_silences(normalized_path: Path, min_silence_seconds: float) -> list[
             "-f", "null", "-",
             "-i", str(normalized_path),
         ],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, check=False, creationflags=_CREATE_NO_WINDOW,
     )
     silence_starts: list[float] = []
     silences: list[tuple[float, float]] = []
@@ -139,7 +142,9 @@ def _extract_span(input_path: Path, output_path: Path, start: float, end: float)
         "-vn", "-ar", "16000", "-b:a", "64k",
         str(output_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        command, capture_output=True, text=True, check=False, creationflags=_CREATE_NO_WINDOW
+    )
     if result.returncode != 0:
         raise AudioProcessingError("音檔切割失敗，請確認 ffmpeg 可正常運作。")
 
@@ -163,7 +168,9 @@ def normalize_audio(input_path: Path, output_path: Path) -> None:
         "64k",
         str(output_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        command, capture_output=True, text=True, check=False, creationflags=_CREATE_NO_WINDOW
+    )
     if result.returncode != 0:
         raise AudioProcessingError("音訊轉檔失敗，請確認檔案格式正確，或改傳其他音訊檔。")
 
@@ -176,7 +183,7 @@ def get_audio_duration(path: Path) -> float:
             "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
             str(path),
         ],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, check=False, creationflags=_CREATE_NO_WINDOW,
     )
     if result.returncode != 0:
         return 0.0
@@ -214,7 +221,7 @@ def decode_audio_to_pcm(
             "-f", "f32le",
             "pipe:1",
         ],
-        capture_output=True, check=False,
+        capture_output=True, check=False, creationflags=_CREATE_NO_WINDOW,
     )
     if result.returncode != 0 or not result.stdout:
         raise AudioProcessingError("音訊解碼失敗，請確認 ffmpeg 可正常運作。")
