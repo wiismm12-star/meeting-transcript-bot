@@ -58,6 +58,15 @@ class DeepgramErrorMessageTests(unittest.TestCase):
             [("SPEAKER_0", 0.0, 0.8, "大家 好。"), ("SPEAKER_1", 1.0, 1.5, "收到")],
         )
 
+    def test_utterances_are_ordered_by_timestamp(self) -> None:
+        segments = _parse_utterances(
+            {"results": {"utterances": [
+                {"speaker": 0, "start": 4, "end": 5, "transcript": "後段。"},
+                {"speaker": 0, "start": 1, "end": 2, "transcript": "前段。"},
+            ]}}
+        )
+        self.assertEqual([segment.text for segment in segments], ["前段。", "後段。"])
+
 
 if __name__ == "__main__":
     unittest.main()

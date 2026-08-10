@@ -14,6 +14,7 @@ from transcript_bot.database import (
     init_database,
     save_transcript_segments,
     update_meeting_summary_text,
+    update_meeting_action_text,
     update_meeting_transcript_text,
     upsert_speaker_aliases,
 )
@@ -69,12 +70,25 @@ class DeleteMeetingTests(unittest.TestCase):
         assert meeting is not None
         self.assertRegex(meeting.created_at, r"^\d{4}-\d{2}-\d{2}")
 
-    def test_transcript_change_invalidates_cached_summary(self) -> None:
+    def test_transcript_change_invalidates_cached_summary_and_actions(self) -> None:
         update_meeting_summary_text(self.data_dir, self.meeting_id, '{"title":"舊摘要"}')
+        update_meeting_action_text(self.data_dir, self.meeting_id, "舊待辦")
         update_meeting_transcript_text(self.data_dir, self.meeting_id, "Speaker 1：更新後內容")
         meeting = get_meeting_export(self.data_dir, self.meeting_id, 1001)
         assert meeting is not None
         self.assertEqual(meeting.summary_text, "")
+        self.assertEqual(meeting.action_text, "")
+
+    def test_preserved_summary_still_invalidates_cached_actions(self) -> None:
+        update_meeting_summary_text(self.data_dir, self.meeting_id, '{"title":"保留摘要"}')
+        update_meeting_action_text(self.data_dir, self.meeting_id, "舊待辦")
+        update_meeting_transcript_text(
+            self.data_dir, self.meeting_id, "Speaker 1：段落更新", preserve_summary=True
+        )
+        meeting = get_meeting_export(self.data_dir, self.meeting_id, 1001)
+        assert meeting is not None
+        self.assertEqual(meeting.summary_text, '{"title":"保留摘要"}')
+        self.assertEqual(meeting.action_text, "")
 
 
 if __name__ == "__main__":

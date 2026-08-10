@@ -251,6 +251,11 @@ class OllamaSummaryTests(unittest.TestCase):
         for block in blocks:
             self.assertIn(block, joined)
 
+    def test_split_transcript_bounds_one_very_long_speaker_turn(self) -> None:
+        chunks = _split_transcript("Speaker 1：" + ("沒有標點" * 2000), chunk_size=6000, overlap=800)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk) <= 6800 for chunk in chunks))
+
 
 if __name__ == "__main__":
     unittest.main()

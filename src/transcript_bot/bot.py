@@ -51,7 +51,6 @@ from transcript_bot.formatting import (
     render_plain_transcript,
     render_raw_transcript,
     render_meeting_minutes,
-    render_action_summary,
 )
 from transcript_bot.storage import create_job_paths
 from transcript_bot.transcription import transcribe_audio_smart
@@ -123,15 +122,15 @@ async def handle_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not update.effective_user or not update.message:
         return
 
-    if len(context.args) != 1 or context.args[0].lower() not in {"raw", "cleaned", "minutes", "summary"}:
+    if len(context.args) != 1 or context.args[0].lower() not in {"raw", "cleaned", "minutes"}:
         await update.message.reply_text(
-            "用法：`/mode raw` 原始逐字稿、`/mode cleaned` 清理版、`/mode minutes` 會議紀錄，或 `/mode summary` 決議摘要。"
+            "用法：`/mode raw` 原始逐字稿、`/mode cleaned` 清理版，或 `/mode minutes` 會議紀錄。"
         )
         return
 
     mode = context.args[0].lower()
     OUTPUT_MODES[update.effective_user.id] = mode
-    label = {"raw": "原始逐字稿", "cleaned": "清理版逐字稿", "minutes": "會議紀錄", "summary": "決議事項摘要"}[mode]
+    label = {"raw": "原始逐字稿", "cleaned": "清理版逐字稿", "minutes": "會議紀錄"}[mode]
     await update.message.reply_text(f"已切換為「{label}」模式，之後的預覽與匯出都會使用此模式。")
 
 
@@ -261,8 +260,6 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             if _output_mode(user.id) == "raw"
             else render_meeting_minutes(polished_text)
             if _output_mode(user.id) == "minutes"
-            else render_action_summary(polished_text)
-            if _output_mode(user.id) == "summary"
             else polished_text
         )
 
@@ -563,8 +560,6 @@ def _transcript_for_mode(meeting, user_id: int) -> str:
         return render_raw_transcript(get_meeting_segments(settings.data_dir, meeting.id, user_id))
     if _output_mode(user_id) == "minutes":
         return render_meeting_minutes(meeting.transcript_text)
-    if _output_mode(user_id) == "summary":
-        return render_action_summary(meeting.transcript_text)
     return meeting.transcript_text
 
 
@@ -592,7 +587,6 @@ async def _export_meeting_documents(message, context: ContextTypes.DEFAULT_TYPE,
         if export_type in {"docx", "both"}:
             title = {
                 "minutes": "會議紀錄",
-                "summary": "決議事項摘要",
             }.get(_output_mode(user_id), "會議逐字稿")
             write_docx(
                 transcript_docx,

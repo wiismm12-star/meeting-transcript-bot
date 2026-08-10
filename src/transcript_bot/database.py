@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import hashlib
 from dataclasses import dataclass
 from contextlib import contextmanager
 from pathlib import Path
@@ -102,6 +103,7 @@ def init_database(data_dir: Path) -> None:
         _ensure_column(conn, "meetings", "summary_text", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "meetings", "title", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "meetings", "notes", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "meetings", "action_text", "TEXT NOT NULL DEFAULT ''")
 
 
 def create_meeting(data_dir: Path, meeting: MeetingRecord) -> None:
@@ -173,9 +175,13 @@ def update_meeting_transcript_text(data_dir: Path, meeting_id: str, transcript_t
             )
         else:
             conn.execute(
-                "UPDATE meetings SET transcript_text = ?, summary_text = '' WHERE id = ?",
+                "UPDATE meetings SET transcript_text = ?, summary_text = '', action_text = '' WHERE id = ?",
                 (transcript_text, meeting_id),
             )
+        if preserve_summary:
+            # Speaker or segment edits change the evidence for a cached action
+            # list even when callers deliberately keep the meeting summary.
+            conn.execute("UPDATE meetings SET action_text = '' WHERE id = ?", (meeting_id,))
 
 
 def update_meeting_summary_text(data_dir: Path, meeting_id: str, summary_text: str) -> None:
@@ -246,6 +252,7 @@ def get_meeting_export(data_dir: Path, meeting_id: str, user_id: int) -> Meeting
                 notes,
                 transcript_text,
                 summary_text,
+                action_text,
                 transcript_txt_path,
                 transcript_docx_path,
                 audio_file_path
@@ -300,6 +307,55 @@ def get_local_meeting_audio_path(data_dir: Path, meeting_id: str) -> Path | None
         return normalized_path
     input_path = Path(str(row["audio_file_path"]))
     return input_path if input_path.is_file() else None
+
+
+def find_matching_local_meeting(
+    data_dir: Path, normalized_audio_path: Path, *, exclude_meeting_id: str
+) -> MeetingExportRecord | None:
+    """Return an earlier completed local meeting with byte-identical audio.
+
+    A repeated upload must not silently produce a different timeline simply
+    because the remote recognizer returned different turn boundaries.  Compare
+    the already-normalized files so equivalent source formats also match.
+    """
+    try:
+        target_hash = _file_sha256(normalized_audio_path)
+    except OSError:
+        return None
+
+    with _connect(data_dir) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, user_id, created_at, title, notes, transcript_text,
+                   summary_text, action_text, transcript_txt_path,
+                   transcript_docx_path, audio_file_path
+            FROM meetings
+            WHERE source_platform = 'local_web'
+              AND id != ?
+              AND transcript_text != ''
+            ORDER BY created_at ASC
+            """,
+            (exclude_meeting_id,),
+        ).fetchall()
+
+    for row in rows:
+        candidate_path = get_local_meeting_audio_path(data_dir, str(row["id"]))
+        if not candidate_path:
+            continue
+        try:
+            if _file_sha256(candidate_path) == target_hash:
+                return _meeting_export_from_row(row)
+        except OSError:
+            continue
+    return None
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as audio_file:
+        for block in iter(lambda: audio_file.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def get_meeting_speaker_labels(data_dir: Path, meeting_id: str) -> list[str]:

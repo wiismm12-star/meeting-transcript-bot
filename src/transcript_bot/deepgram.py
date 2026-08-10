@@ -67,7 +67,16 @@ def _parse_utterances(payload: dict[str, Any]) -> list[TranscriptSegment]:
                 text=text,
             )
         )
-    return segments
+    # The API normally returns utterances in timeline order, but do not make
+    # the player alignment depend on that transport ordering.
+    return sorted(
+        segments,
+        key=lambda segment: (
+            segment.start is None,
+            segment.start if segment.start is not None else float("inf"),
+            segment.end if segment.end is not None else float("inf"),
+        ),
+    )
 
 
 def _parse_words(payload: dict[str, Any], use_deepgram_speakers: bool = True) -> list[TranscriptSegment]:

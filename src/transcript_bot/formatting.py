@@ -23,7 +23,6 @@ _CONFIRMED_ASR_CORRECTIONS = {
     "中校復興": "忠孝復興",
     "中正復興": "忠孝復興",
 }
-_ACTION_KEYWORDS = ("決定", "決議", "確認", "同意", "負責", "完成", "安排", "提交", "回覆", "跟進", "下一步")
 
 
 @dataclass(frozen=True)
@@ -121,32 +120,6 @@ def _shorten_summary_item(text: str, limit: int = 110) -> str:
         return text
     sentence_end = max(text.rfind(mark, 0, limit) for mark in "。！？；")
     return text[: sentence_end + 1 if sentence_end > 20 else limit].rstrip("，、；") + "…"
-
-
-def render_action_summary(cleaned_transcript: str) -> str:
-    """Extract only explicit decision or action language; never infer a new conclusion."""
-    items: list[str] = []
-    seen: set[str] = set()
-
-    for line in cleaned_transcript.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        match = re.match(r"^(.+?)[：:]\s*(.+)$", line)
-        if not match:
-            continue
-        speaker, content = match.groups()
-        for sentence in re.split(r"(?<=[。！？；])", content):
-            sentence = sentence.strip()
-            if sentence and any(keyword in sentence for keyword in _ACTION_KEYWORDS):
-                item = f"{speaker}：{sentence}"
-                if item not in seen:
-                    seen.add(item)
-                    items.append(item)
-
-    if not items:
-        return "# 決議事項摘要\n\n未偵測到原文中明確的決議或行動事項。"
-    return "# 決議事項摘要\n\n## 原文明確提及的事項\n" + "\n".join(f"- {item}" for item in items)
 
 
 def polish_local_transcript(text: str) -> str:

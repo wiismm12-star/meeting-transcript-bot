@@ -15,6 +15,7 @@ from transcript_bot.database import (
     MeetingRecord,
     create_meeting,
     delete_meeting,
+    find_matching_local_meeting,
     get_local_meeting_export,
     get_local_meeting_audio_path,
     get_meeting_segments,
@@ -28,7 +29,6 @@ from transcript_bot.database import (
     update_meeting_summary_text,
     update_transcript_segment_text,
     update_transcript_segment_speaker,
-    update_meeting_action_text,
     update_meeting_transcript_text,
 )
 from transcript_bot.formatting import (
@@ -36,7 +36,6 @@ from transcript_bot.formatting import (
     normalize_speaker_labels,
     polish_local_transcript,
     polish_transcript,
-    render_action_summary,
     MeetingSummary,
     build_fallback_meeting_summary,
     render_plain_transcript,
@@ -45,7 +44,7 @@ from transcript_bot.formatting import (
 from transcript_bot.exporters import write_docx, write_text
 from transcript_bot.storage import create_job_paths, ensure_data_dirs
 from transcript_bot.transcription import transcribe_audio_smart
-from transcript_bot.ollama_client import OllamaError, extract_actions_with_ollama, summarize_meeting_with_ollama
+from transcript_bot.ollama_client import OllamaError, summarize_meeting_with_ollama
 from transcript_bot.line_bot import LineBotError, acknowledgement_for_event, reply_to_line, verify_webhook_signature
 
 # Module-level job tracking for async transcription
@@ -172,16 +171,11 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
             aliases = get_speaker_aliases(app.config["DATA_DIR"], meeting.id, meeting.user_id)
             display_transcript_text = apply_speaker_aliases(meeting.transcript_text, aliases)
             active_tab = request.args.get("tab", "transcript")
-            active_tab = active_tab if active_tab in {"transcript", "summary", "actions", "notes"} else "transcript"
+            active_tab = active_tab if active_tab in {"transcript", "summary", "notes"} else "transcript"
             summary = _deserialize_summary(meeting.summary_text)
             if active_tab == "summary" and summary is None:
                 summary = _generate_meeting_summary(display_transcript_text, meeting.title)
                 update_meeting_summary_text(app.config["DATA_DIR"], meeting.id, _serialize_summary(summary))
-            if active_tab == "actions" and not meeting.action_text.strip():
-                action_text = extract_actions_with_ollama(display_transcript_text)
-                update_meeting_action_text(app.config["DATA_DIR"], meeting.id, action_text)
-            else:
-                action_text = meeting.action_text
             labels = get_meeting_speaker_labels(app.config["DATA_DIR"], meeting.id)
             # Merge alias-only speakers (added via + button, have no segments yet)
             for alias_key in aliases:
@@ -199,7 +193,6 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
                 aliases=aliases,
                 display_transcript_text=display_transcript_text,
                 summary=summary,
-                action_text=action_text,
                 active_tab=active_tab,
                 audio_available=get_local_meeting_audio_path(app.config["DATA_DIR"], meeting.id) is not None,
                 saved=request.args.get("saved") == "1",
@@ -471,6 +464,27 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         # Get audio duration for percentage calculation
         duration = get_audio_duration(paths.normalized_audio)
 
+        # A byte-identical local recording has one already-confirmed timeline.
+        # Reuse it rather than exposing a second, potentially different ASR
+        # segmentation for the same audio.
+        existing_meeting = find_matching_local_meeting(
+            Path(data_dir), paths.normalized_audio, exclude_meeting_id=job_id
+        )
+        if existing_meeting:
+            _job_progress[job_id] = {
+                "step": "reusing",
+                "pct": 82,
+                "label": "reusing (重用相同音檔的既有逐字稿)",
+            }
+            segments = get_meeting_segments(Path(data_dir), existing_meeting.id, existing_meeting.user_id)
+            if segments:
+                save_transcript_segments(data_dir, job_id, segments)
+                update_meeting_transcript_text(data_dir, job_id, existing_meeting.transcript_text)
+                update_meeting_summary_text(data_dir, job_id, existing_meeting.summary_text)
+                update_meeting_metadata(data_dir, job_id, Path(original_filename).stem[:160], "")
+                _job_progress[job_id] = {"step": "done", "pct": 100, "label": "done (完成)"}
+                return
+
         # Step 2: Transcribe with diarization (25 → 90%)
         if cancel_event.is_set():
             return
@@ -548,13 +562,6 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         _job_progress[job_id] = {"step": "summarizing", "pct": 90, "label": "summarizing (會議摘要)"}
         summary = _generate_meeting_summary(transcript_text, Path(original_filename).stem[:160])
         update_meeting_summary_text(data_dir, job_id, _serialize_summary(summary))
-
-        # Step 5: Action items (94 → 100%)
-        if cancel_event.is_set():
-            return
-        _job_progress[job_id] = {"step": "actions", "pct": 96, "label": "actions (待辦事項提取)"}
-        action_text = extract_actions_with_ollama(transcript_text)
-        update_meeting_action_text(data_dir, job_id, action_text)
 
         _job_progress[job_id] = {"step": "done", "pct": 100, "label": "done (完成)"}
 

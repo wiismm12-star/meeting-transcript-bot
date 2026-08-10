@@ -194,7 +194,6 @@ https://你的公開網域/line/webhook
 /mode raw               原始逐字稿
 /mode cleaned           清理版逐字稿
 /mode minutes           保守會議紀錄
-/mode summary           僅擷取原文明確的決議或行動
 /delete <meeting_id>    刪除自己的會議與相關本機檔案
 ```
 

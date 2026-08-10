@@ -7,7 +7,6 @@ from transcript_bot.formatting import (
     clean_text,
     normalize_speaker_labels,
     polish_local_transcript,
-    render_action_summary,
     render_meeting_minutes,
     render_raw_transcript,
     split_segments_by_sentences,
@@ -33,7 +32,7 @@ class FormattingTests(unittest.TestCase):
         result = polish_local_transcript(
             "Speaker 1: 呃，這 個 是 測試。。\n\nSpeaker 1: 呃，這 個 是 測試。。"
         )
-        self.assertEqual(result, "Speaker 1：這個是測試")
+        self.assertEqual(result, "Speaker 1：這個是測試。")
 
     def test_normalizes_speaker_labels_without_merging_source_utterances(self) -> None:
         segments = normalize_speaker_labels(
@@ -83,20 +82,6 @@ class FormattingTests(unittest.TestCase):
             result,
             "# 會議紀錄\n\n## 發言摘要\n- Speaker 1：確認時程。\n- Speaker 2：下週回覆。",
         )
-
-    def test_action_summary_extracts_only_explicit_action_language(self) -> None:
-        result = render_action_summary(
-            "Speaker 1：今天討論專案。\n\nSpeaker 2：下週確認測試時程。"
-        )
-        self.assertEqual(
-            result,
-            "# 決議事項摘要\n\n## 原文明確提及的事項\n- Speaker 2：下週確認測試時程。",
-        )
-
-    def test_action_summary_does_not_infer_a_decision(self) -> None:
-        result = render_action_summary("Speaker 1：今天討論專案。")
-        self.assertEqual(result, "# 決議事項摘要\n\n未偵測到原文中明確的決議或行動事項。")
-
 
 if __name__ == "__main__":
     unittest.main()
