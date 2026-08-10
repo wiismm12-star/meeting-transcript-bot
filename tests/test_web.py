@@ -56,6 +56,12 @@ class LocalWebCorrectionTests(unittest.TestCase):
         self.assertIn(self.meeting_id.encode(), response.data)
         self.assertIn("新增一場會議".encode(), response.data)
 
+    def test_recent_meeting_card_is_not_a_navigation_target(self) -> None:
+        response = self.client.get("/")
+        self.assertIn("開啟工作台".encode(), response.data)
+        self.assertNotIn(b"data-href=", response.data)
+        self.assertNotIn(b"Card click navigation", response.data)
+
     def test_upload_rejects_missing_or_unsupported_files_before_transcription(self) -> None:
         missing_file = self.client.post("/upload", data={}, follow_redirects=True)
         unsupported_file = self.client.post(

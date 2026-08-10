@@ -41,7 +41,7 @@
     <div class="meeting-list-heading"><div><p class="eyebrow">YOUR RECORDINGS</p><h2>最近會議 <span>{{ done_meetings|length }}</span></h2></div><div class="meeting-list-actions"><label class="select-all"><input id="select-all-meetings" type="checkbox"> 全選</label><span id="selected-count" class="meta">尚未選取</span><button id="delete-selected" class="danger-button" type="button">刪除已選會議</button></div></div>
       <form id="bulk-delete-form" method="post" action="{{ url_for('delete_selected_local_meetings') }}">
         {% for meeting in done_meetings %}
-          <section class="card meeting-list-card" data-href="{{ url_for('edit_meeting', meeting_id=meeting.id) }}" role="link" tabindex="0" aria-label="開啟 {{ meeting.title or meeting.created_at[:16] }} 工作台">
+          <section class="card meeting-list-card">
             <label class="meeting-check"><input class="meeting-select" type="checkbox" name="meeting_ids" value="{{ meeting.id }}" aria-label="選取 {{ meeting.title or meeting.created_at[:16] }}"><span></span></label>
             <div class="meeting-list-content"><div class="meeting-title-row"><strong>{{ meeting.title or meeting.created_at[:16] }}</strong><time>{{ meeting.created_at[:16] }}</time></div><div class="meeting-id"># {{ meeting.id[:12] }}</div><p>{{ meeting.transcript_text[:150] }}{% if meeting.transcript_text|length > 150 %}…{% endif %}</p><div class="meeting-actions"><a class="open-meeting" href="{{ url_for('edit_meeting', meeting_id=meeting.id) }}">開啟工作台 <span>→</span></a></div></div>
           </section>
@@ -63,13 +63,6 @@
       document.getElementById('delete-selected').addEventListener('click',()=>{const picked=selections.filter(item=>item.checked).length;if(!picked){alert('請先選取要刪除的會議。');return;}if(!confirm(`確定要刪除 ${picked} 場會議及其本機音檔嗎？此操作無法復原。`))return;document.getElementById('bulk-delete-form').submit();});
       syncSelection();
     }
-    {# ── Card click navigation for completed meetings only ── #}
-    document.querySelectorAll('.meeting-list-card[data-href]').forEach(card=>{
-      if(!card.dataset.href)return;
-      const open=()=>location.assign(card.dataset.href);
-      card.addEventListener('click',event=>{if(!event.target.closest('input,label,a,button'))open();});
-      card.addEventListener('keydown',event=>{if((event.key==='Enter'||event.key===' ')&&!event.target.closest('input,label')){event.preventDefault();open();}});
-    });
     {# ── Progress polling + auto-refresh ── #}
     {% if job_progress|length > 0 %}
     const pollProgress=()=>{
