@@ -30,6 +30,10 @@ class LocalWhisperTests(unittest.TestCase):
                 patch("faster_whisper.WhisperModel", return_value=whisper_model),
                 patch("faster_whisper.utils.download_model") as download_model,
                 patch(
+                    "transcript_bot.audio.decode_audio_to_pcm",
+                    return_value=(object(), 16000),
+                ),
+                patch(
                     "transcript_bot.whisper_local.settings",
                     SimpleNamespace(
                         whisper_device="cpu",

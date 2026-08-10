@@ -20,7 +20,13 @@ _BLOCKER = threading.Event()
 _STARTED = threading.Event()
 
 
-def _fake_transcribe(audio_path, progress_callback=None):
+def _fake_transcribe(
+    audio_path,
+    progress_callback=None,
+    chunk_label_callback=None,
+    stage_callback=None,
+):
+    """Match the production orchestration API while blocking the job worker."""
     _STARTED.set()
     _BLOCKER.wait()
     return [TranscriptSegment("Speaker 1", 0.0, 1.0, "暫停測試用內容")]
@@ -29,13 +35,19 @@ def _fake_transcribe(audio_path, progress_callback=None):
 class ConcurrencyLimitTests(unittest.TestCase):
     def _drain_threads(self) -> None:
         """Release any lingering blocker and join leftover background threads."""
-        _BLOCKER.set()
-        for thread in list(web._active_jobs.values()):
-            thread.join(timeout=5)
-        web._active_jobs.clear()
-        web._job_progress.clear()
+        # Drop queued work first: releasing a running job otherwise promotes a
+        # second job while this test's temporary directory is being removed.
         web._job_queue.clear()
         web._queued_payloads.clear()
+        _BLOCKER.set()
+        for _ in range(3):
+            threads = list(web._active_jobs.values())
+            if not threads:
+                break
+            for thread in threads:
+                thread.join(timeout=5)
+        web._active_jobs.clear()
+        web._job_progress.clear()
         web._running_count = 0
 
     def setUp(self) -> None:
@@ -48,12 +60,17 @@ class ConcurrencyLimitTests(unittest.TestCase):
         self._drain_threads()  # clear any threads left by a prior test in this process
         _BLOCKER.clear()
         _STARTED.clear()
+        # Keep substitutes installed until tearDown has released and joined the
+        # worker. A background job outlives the HTTP upload request.
+        self._patches = self._patched()
+        self._patches.__enter__()
         self.app = web.create_web_app(self.data_dir)
         self.client = self.app.test_client()
 
     def tearDown(self) -> None:
         settings.max_concurrent_jobs = self._orig_max
         self._drain_threads()
+        self._patches.close()
         try:
             self.temp_dir.cleanup()
         except PermissionError:
@@ -87,9 +104,8 @@ class ConcurrencyLimitTests(unittest.TestCase):
         )
 
     def test_second_upload_is_queued_when_limit_reached(self) -> None:
-        with self._patched():
-            self._upload("a.m4a")
-            self._upload("b.m4a")
+        self._upload("a.m4a")
+        self._upload("b.m4a")
         # give the spawned thread a moment to enter the fake (and grab a slot)
         _STARTED.wait(timeout=2)
         time.sleep(0.1)
@@ -105,9 +121,8 @@ class ConcurrencyLimitTests(unittest.TestCase):
         self.assertTrue(prog.get("queued", False))
 
     def test_completed_job_frees_slot_for_queued(self) -> None:
-        with self._patched():
-            self._upload("a.m4a")
-            self._upload("b.m4a")
+        self._upload("a.m4a")
+        self._upload("b.m4a")
         _STARTED.wait(timeout=2)
         time.sleep(0.1)
         self.assertEqual(len(web._job_queue), 1)
@@ -127,9 +142,8 @@ class ConcurrencyLimitTests(unittest.TestCase):
         self.assertIn(web._running_count, (0, 1))
 
     def test_deleting_queued_job_does_not_leak(self) -> None:
-        with self._patched():
-            self._upload("a.m4a")
-            self._upload("b.m4a")
+        self._upload("a.m4a")
+        self._upload("b.m4a")
         _STARTED.wait(timeout=2)
         time.sleep(0.1)
         self.assertEqual(len(web._job_queue), 1)

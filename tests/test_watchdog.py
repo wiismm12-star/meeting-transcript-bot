@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -24,11 +25,17 @@ class WatchdogTests(unittest.TestCase):
             source_dir = root / "src" / "transcript_bot" / "templates"
             source_dir.mkdir(parents=True)
             (root / "run_server.py").write_text("print('run')", encoding="utf-8")
-            (source_dir / "index.html").write_text("first", encoding="utf-8")
+            page = source_dir / "index.html"
+            page.write_text("first", encoding="utf-8")
             (source_dir / "notes.txt").write_text("ignored", encoding="utf-8")
 
             first = watchdog.source_snapshot(root)
-            (source_dir / "index.html").write_text("updated page", encoding="utf-8")
+            page.write_text("updated page", encoding="utf-8")
+            # Windows filesystems can retain the same mtime for rapid writes.
+            # Advance it explicitly so this test checks snapshot behaviour,
+            # rather than the filesystem timestamp resolution.
+            stat = page.stat()
+            os.utime(page, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
             second = watchdog.source_snapshot(root)
 
         self.assertIn("src\\transcript_bot\\templates\\index.html", first)
