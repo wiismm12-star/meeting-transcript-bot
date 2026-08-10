@@ -351,7 +351,6 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 transcript_txt_path=str(paths.transcript_txt), transcript_docx_path=str(paths.transcript_docx),
             ),
         )
-        progress_notice = await message.reply_text("處理進度：0%\n目前階段：從 Telegram 下載音檔")
         loop = asyncio.get_running_loop()
         last_pushed_pct = -10
         last_pushed_step = ""
@@ -367,13 +366,14 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             }
             return f"處理進度：{pct}%\n目前階段：{labels.get(step, '處理中')}"
 
-        async def _edit_progress(step: str, pct: int) -> None:
-            if not hasattr(progress_notice, "edit_text"):
-                return
+        async def _send_progress(step: str, pct: int) -> None:
             try:
-                await progress_notice.edit_text(_progress_text(step, pct))
+                # Telegram does not normally notify users when a message is
+                # edited. Send a fresh, throttled status message so progress
+                # reaches the user as an actual push notification.
+                await message.reply_text(_progress_text(step, pct))
             except (BadRequest, TimedOut):
-                logger.debug("Unable to update Telegram progress message", exc_info=True)
+                logger.debug("Unable to send Telegram progress message", exc_info=True)
 
         def _schedule_progress(step: str, pct: int) -> None:
             nonlocal last_pushed_pct, last_pushed_step
@@ -383,7 +383,7 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 return
             last_pushed_step = step
             last_pushed_pct = pct
-            asyncio.create_task(_edit_progress(step, pct))
+            asyncio.create_task(_send_progress(step, pct))
 
         def _set_progress(step: str, pct: int, label: str) -> None:
             write_job_status(settings.data_dir, paths.job_id, source="telegram", step=step, pct=pct, label=label)
@@ -452,7 +452,7 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         _set_progress("summarizing", 90, "summarizing (會議摘要)")
         summary = await asyncio.to_thread(_generate_meeting_summary, polished_text, meeting_title)
         update_meeting_summary_text(settings.data_dir, paths.job_id, _serialize_summary(summary))
-        await _edit_progress("completed", 100)
+        await _send_progress("completed", 100)
         clear_job_status(settings.data_dir, paths.job_id)
         displayed_text = (
             render_raw_transcript(normalized_segments)
