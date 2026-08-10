@@ -213,9 +213,6 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
             active_tab = request.args.get("tab", "transcript")
             active_tab = active_tab if active_tab in {"transcript", "summary", "notes"} else "transcript"
             summary = _deserialize_summary(meeting.summary_text)
-            if active_tab == "summary" and summary is None:
-                summary = _generate_meeting_summary(display_transcript_text, meeting.title)
-                update_meeting_summary_text(app.config["DATA_DIR"], meeting.id, _serialize_summary(summary))
             labels = get_meeting_speaker_labels(app.config["DATA_DIR"], meeting.id)
             # Merge alias-only speakers (added via + button, have no segments yet)
             for alias_key in aliases:

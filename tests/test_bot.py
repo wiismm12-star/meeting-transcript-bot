@@ -13,6 +13,7 @@ from telegram.error import BadRequest, TimedOut
 from transcript_bot import bot
 from transcript_bot.bot import _local_telegram_file_path, _telegram_download_error_message
 from transcript_bot.database import get_local_meeting_export, init_database
+from transcript_bot.formatting import MeetingSummary
 from transcript_bot.job_status import get_job_status
 from transcript_bot.transcription import TranscriptSegment
 from transcript_bot.web import create_web_app
@@ -114,11 +115,59 @@ class TelegramWebLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 patch("transcript_bot.bot.normalize_audio", fake_normalize),
                 patch("transcript_bot.bot.get_audio_duration", return_value=100.0),
                 patch("transcript_bot.bot.transcribe_audio_smart", fake_transcribe),
+                patch("transcript_bot.bot._generate_meeting_summary", return_value=MeetingSummary("測試會議", "摘要概覽", ["摘要重點"])),
                 patch("transcript_bot.bot.write_job_status", capture_status),
             ):
                 await bot.process_audio(update, context)
 
         self.assertEqual(progress_updates, [20, 35, 50, 80])
+
+    async def test_telegram_completion_saves_and_replies_with_summary(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            init_database(data_dir)
+            replies: list[str] = []
+
+            class FakeMessage:
+                chat_id = 123
+                voice = None
+                document = None
+                audio = SimpleNamespace(file_id="file-id", file_size=10, file_name="董事會.mp3")
+
+                async def reply_text(self, text, **_kwargs):
+                    replies.append(text)
+
+            class FakeBot:
+                async def send_chat_action(self, **_kwargs):
+                    return None
+
+                async def get_file(self, _file_id):
+                    return SimpleNamespace(file_path="/unused")
+
+            async def fake_download(_telegram_file, target):
+                target.write_bytes(b"fake-audio")
+
+            def fake_normalize(source, target):
+                target.write_bytes(source.read_bytes())
+
+            update = SimpleNamespace(message=FakeMessage(), effective_user=SimpleNamespace(id=999))
+            context = SimpleNamespace(bot=FakeBot())
+            with (
+                patch.object(bot.settings, "data_dir", data_dir),
+                patch.object(bot.settings, "enable_polish", False),
+                patch("transcript_bot.bot._download_telegram_audio", fake_download),
+                patch("transcript_bot.bot.normalize_audio", fake_normalize),
+                patch("transcript_bot.bot.transcribe_audio_smart", return_value=[TranscriptSegment("SPEAKER_0", 0.0, 1.0, "確認時程")]),
+                patch("transcript_bot.bot._generate_meeting_summary", return_value=MeetingSummary("董事會", "確認後續安排。", ["確認時程。"])),
+            ):
+                await bot.process_audio(update, context)
+
+            meeting = get_local_meeting_export(data_dir, next(iter((data_dir / "jobs").iterdir())).name)
+            self.assertIsNotNone(meeting)
+            self.assertEqual(meeting.title, "董事會")
+            self.assertIn("確認後續安排", meeting.summary_text)
+            self.assertTrue(any("正在整理會議摘要" in reply for reply in replies))
+            self.assertTrue(any("會議摘要：董事會" in reply for reply in replies))
 
     async def test_telegram_job_is_visible_then_web_cancel_stops_and_cleans_it(self) -> None:
         """Exercise the real Bot → shared status → Web cancel handoff end to end."""

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import shutil
 from dataclasses import dataclass
@@ -34,6 +35,8 @@ from transcript_bot.database import (
     get_meeting_speaker_samples,
     get_speaker_aliases,
     save_transcript_segments,
+    update_meeting_metadata,
+    update_meeting_summary_text,
     update_meeting_transcript_text,
     upsert_speaker_aliases,
 )
@@ -45,7 +48,9 @@ from transcript_bot.ollama_client import OllamaError
 from transcript_bot.mailer import EmailDeliveryError, is_valid_email, send_transcript_email
 from transcript_bot.exporters import write_docx, write_text
 from transcript_bot.formatting import (
+    MeetingSummary,
     apply_speaker_aliases,
+    build_fallback_meeting_summary,
     normalize_speaker_labels,
     parse_alias_message,
     polish_local_transcript,
@@ -54,6 +59,7 @@ from transcript_bot.formatting import (
     render_raw_transcript,
     render_meeting_minutes,
 )
+from transcript_bot.ollama_client import summarize_meeting_with_ollama
 from transcript_bot.storage import create_job_paths
 from transcript_bot.transcription import transcribe_audio_smart
 from transcript_bot.job_status import cancel_requested, clear_job_status, write_job_status
@@ -83,6 +89,41 @@ OUTPUT_MODES: dict[int, str] = {}
 
 class TelegramLocalFileError(RuntimeError):
     """The local Bot API file path cannot be read from this host."""
+
+
+def _telegram_meeting_title(message) -> str:
+    """Use the uploaded file name as the same initial meeting title as Web."""
+    for media in (getattr(message, "audio", None), getattr(message, "document", None)):
+        file_name = getattr(media, "file_name", None)
+        if file_name:
+            return Path(file_name).stem[:160]
+    return "Telegram 會議"
+
+
+def _generate_meeting_summary(transcript: str, meeting_title: str) -> MeetingSummary:
+    """Match the Web summary behavior, retaining a readable offline fallback."""
+    try:
+        payload = summarize_meeting_with_ollama(transcript, meeting_title)
+        return MeetingSummary(
+            title=str(payload["title"]),
+            overview=str(payload["overview"]),
+            highlights=[str(item) for item in payload["highlights"]],
+        )
+    except OllamaError:
+        return build_fallback_meeting_summary(transcript, meeting_title)
+
+
+def _serialize_summary(summary: MeetingSummary) -> str:
+    return json.dumps(
+        {"title": summary.title, "overview": summary.overview, "highlights": summary.highlights},
+        ensure_ascii=False,
+    )
+
+
+def _summary_preview(summary: MeetingSummary) -> str:
+    highlights = "\n".join(f"- {item}" for item in summary.highlights[:3])
+    detail = f"\n{highlights}" if highlights else ""
+    return f"會議摘要：{summary.title}\n{summary.overview}{detail}"
 
 
 def _local_telegram_file_path(file_path: str) -> Path | None:
@@ -364,6 +405,15 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         polished_text = polish_transcript(raw_text) if settings.enable_polish else polish_local_transcript(raw_text)
         polished_text = polish_local_transcript(polished_text)
         update_meeting_transcript_text(settings.data_dir, paths.job_id, polished_text)
+        meeting_title = _telegram_meeting_title(message)
+        update_meeting_metadata(settings.data_dir, paths.job_id, meeting_title, "")
+        if cancel_requested(settings.data_dir, paths.job_id):
+            raise asyncio.CancelledError
+        write_job_status(settings.data_dir, paths.job_id, source="telegram", step="summarizing", pct=90,
+                         label="summarizing (會議摘要)")
+        await message.reply_text("逐字稿已完成，正在整理會議摘要。")
+        summary = await asyncio.to_thread(_generate_meeting_summary, polished_text, meeting_title)
+        update_meeting_summary_text(settings.data_dir, paths.job_id, _serialize_summary(summary))
         clear_job_status(settings.data_dir, paths.job_id)
         displayed_text = (
             render_raw_transcript(normalized_segments)
@@ -374,7 +424,8 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
         await message.reply_text(
-            f"會議 ID：{paths.job_id}\n\n{_preview_text(displayed_text)}\n\n請選擇要輸出的檔案：",
+            f"會議 ID：{paths.job_id}\n\n{_summary_preview(summary)}\n\n"
+            f"逐字稿預覽：\n{_preview_text(displayed_text)}\n\n請選擇要輸出的檔案：",
             reply_markup=_export_keyboard(paths.job_id),
         )
     except asyncio.CancelledError:

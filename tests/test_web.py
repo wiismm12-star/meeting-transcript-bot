@@ -284,18 +284,13 @@ class LocalWebCorrectionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("逐字稿不可留白。".encode(), response.data)
 
-    def test_summary_tab_renders_a_structured_summary_instead_of_transcript_lines(self) -> None:
+    def test_summary_tab_does_not_generate_a_summary_during_page_load(self) -> None:
         with patch(
             "transcript_bot.web.summarize_meeting_with_ollama",
-            return_value={
-                "title": "測試會議重點",
-                "overview": "本次會議確認了測試方向與後續安排。",
-                "highlights": ["確認測試方向。", "安排後續驗證。"],
-            },
-        ):
+        ) as summarize:
             response = self.client.get(f"/meetings/{self.meeting_id}?tab=summary")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("測試會議重點".encode(), response.data)
-        self.assertIn("本次會議確認了測試方向與後續安排。".encode(), response.data)
+        summarize.assert_not_called()
+        self.assertIn("尚未產生摘要".encode(), response.data)
         self.assertIn("重新產生摘要".encode(), response.data)
