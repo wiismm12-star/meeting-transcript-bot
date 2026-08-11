@@ -26,12 +26,13 @@
     <div class="meeting-list-heading"><div><p class="eyebrow">PROCESSING</p><h2>轉錄中 <span>{{ active_meetings|length }}</span></h2></div></div>
       {% for meeting in active_meetings %}
         {% set is_active = meeting.id in active_jobs %}
-        {% set is_queued = (job_progress.get(meeting.id) or {}).get('queued', false) %}
+        {% set prog = job_progress.get(meeting.id) or {} %}
+        {% set is_queued = prog.get('queued', false) %}
+        {% set is_failed = prog.get('step') == 'error' %}
         {% set display_name = meeting.title or (meeting.audio_file_path | basename if meeting.audio_file_path else meeting.created_at[:16]) %}
         {% set show_progress = is_active or is_queued %}
-        {% set prog = job_progress.get(meeting.id, {}) if show_progress else {} %}
-        <section class="card meeting-list-card processing-card compact" role="region" aria-label="{{ '轉錄中' if is_active else ('排隊中' if is_queued else '轉錄未完成') }} {{ display_name }}">
-          <div class="meeting-list-content"><div class="meeting-title-row"><strong>{{ display_name }}</strong><span class="meeting-id"># {{ meeting.id[:12] }}</span><span class="meeting-date">{{ meeting.created_at[:10] }}</span><span class="meeting-time">{{ meeting.created_at[11:16] }}</span>{% if is_active %}<span class="status-badge processing">● 轉錄中…</span>{% elif is_queued %}<span class="status-badge queued">⏳ 排隊中…</span>{% else %}<span class="status-badge failed">轉錄未完成</span>{% endif %}</div>{% if show_progress %}{% set prog = job_progress.get(meeting.id, {}) %}<div class="progress-wrap"><div class="progress-stage" id="prog-stage-{{ meeting.id[:12] }}">{{ prog.label if prog.label else '初始化' }}</div><div class="progress-row"><div class="progress-bar" id="prog-{{ meeting.id[:12] }}"><div class="progress-fill" style="width:{{ prog.pct if prog.pct else 0 }}%"></div></div><span class="progress-text" id="prog-text-{{ meeting.id[:12] }}">{{ prog.pct if prog.pct else 0 }}%</span></div></div>{% endif %}<div class="meeting-actions"><form method="post" action="{{ url_for('delete_local_meeting', meeting_id=meeting.id) }}" style="display:inline" onsubmit="return confirm('確定要終止此會議的轉錄並刪除已上傳的音檔嗎？')"><input type="hidden" name="cancelled" value="1"><button type="submit" class="cancel-transcribe">✕ 終止轉錄</button></form></div></div>
+        <section class="card meeting-list-card processing-card compact" role="region" aria-label="{{ '轉錄中' if is_active else ('排隊中' if is_queued else ('轉錄失敗' if is_failed else '轉錄未完成')) }} {{ display_name }}">
+          <div class="meeting-list-content"><div class="meeting-title-row"><strong>{{ display_name }}</strong><span class="meeting-id"># {{ meeting.id[:12] }}</span><span class="meeting-date">{{ meeting.created_at[:10] }}</span><span class="meeting-time">{{ meeting.created_at[11:16] }}</span>{% if is_active %}<span class="status-badge processing">● 轉錄中…</span>{% elif is_queued %}<span class="status-badge queued">⏳ 排隊中…</span>{% elif is_failed %}<span class="status-badge failed">轉錄失敗</span>{% else %}<span class="status-badge failed">轉錄未完成</span>{% endif %}</div>{% if show_progress %}<div class="progress-wrap"><div class="progress-stage" id="prog-stage-{{ meeting.id[:12] }}">{{ prog.label if prog.label else '初始化' }}</div><div class="progress-row"><div class="progress-bar" id="prog-{{ meeting.id[:12] }}"><div class="progress-fill" style="width:{{ prog.pct if prog.pct else 0 }}%"></div></div><span class="progress-text" id="prog-text-{{ meeting.id[:12] }}">{{ prog.pct if prog.pct else 0 }}%</span></div></div>{% elif is_failed %}<p class="error">{{ prog.label }}</p>{% endif %}<div class="meeting-actions"><form method="post" action="{{ url_for('delete_local_meeting', meeting_id=meeting.id) }}" style="display:inline" onsubmit="return confirm('確定要終止此會議的轉錄並刪除已上傳的音檔嗎？')"><input type="hidden" name="cancelled" value="1"><button type="submit" class="cancel-transcribe">✕ 終止轉錄</button></form></div></div>
         </section>
       {% endfor %}
     {% endif %}
@@ -67,7 +68,7 @@
       syncSelection();
     }
     {# ── Progress polling + auto-refresh ── #}
-    const pageJobs={{ job_progress.keys()|list|tojson }}.sort();
+    const pageJobs={{ polling_jobs|tojson }}.sort();
     const sameJobs=jobs=>jobs.length===pageJobs.length&&jobs.every((job,index)=>job===pageJobs[index]);
     const pollProgress=()=>{
       fetch('/api/jobs/active').then(response=>response.json()).then(snapshot=>{

@@ -12,6 +12,10 @@ class LocalWhisperError(RuntimeError):
     """Raised when the optional local Whisper runtime cannot transcribe audio."""
 
 
+_MODEL_CACHE: dict[tuple[str, str, str], object] = {}
+_MODEL_CACHE_LOCK = threading.Lock()
+
+
 def load_whisper_model():
     """Load a faster-whisper model once; reused across parallel chunk jobs.
 
@@ -30,19 +34,26 @@ def load_whisper_model():
     device, compute_type = _runtime_options()
     prompt = settings.whisper_initial_prompt.strip()
     model_dir = _model_directory()
-    try:
-        if not (model_dir / "model.bin").is_file():
-            model_dir.mkdir(parents=True, exist_ok=True)
-            download_model(settings.whisper_model, output_dir=str(model_dir))
-        model = WhisperModel(str(model_dir), device=device, compute_type=compute_type)
-    except PermissionError as exc:
-        raise LocalWhisperError("本機 Whisper 模型目錄沒有寫入權限，請確認 data/models 可寫入。") from exc
-    except Exception as exc:
-        raise LocalWhisperError(
-            f"本機 Whisper 模型載入失敗（{device}/{compute_type}）。請稍後重試。"
-        ) from exc
-    model._whisper_prompt = prompt  # type: ignore[attr-defined]
-    return model
+    cache_key = (str(model_dir.resolve()), device, compute_type)
+    with _MODEL_CACHE_LOCK:
+        cached_model = _MODEL_CACHE.get(cache_key)
+        if cached_model is not None:
+            cached_model._whisper_prompt = prompt  # type: ignore[attr-defined]
+            return cached_model
+        try:
+            if not (model_dir / "model.bin").is_file():
+                model_dir.mkdir(parents=True, exist_ok=True)
+                download_model(settings.whisper_model, output_dir=str(model_dir))
+            model = WhisperModel(str(model_dir), device=device, compute_type=compute_type)
+        except PermissionError as exc:
+            raise LocalWhisperError("本機 Whisper 模型目錄沒有寫入權限，請確認 data/models 可寫入。") from exc
+        except Exception as exc:
+            raise LocalWhisperError(
+                f"本機 Whisper 模型載入失敗（{device}/{compute_type}）。請稍後重試。"
+            ) from exc
+        model._whisper_prompt = prompt  # type: ignore[attr-defined]
+        _MODEL_CACHE[cache_key] = model
+        return model
 
 
 def transcribe_with_local_whisper(audio_path: Path, progress_callback=None) -> list[TranscriptSegment]:

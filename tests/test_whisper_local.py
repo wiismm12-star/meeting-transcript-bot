@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from transcript_bot.whisper_local import transcribe_with_local_whisper
+from transcript_bot.whisper_local import _MODEL_CACHE, load_whisper_model, transcribe_with_local_whisper
 
 
 class LocalWhisperTests(unittest.TestCase):
@@ -55,6 +55,31 @@ class LocalWhisperTests(unittest.TestCase):
         self.assertEqual(kwargs["initial_prompt"], "KKBOX,忠孝復興")
         self.assertTrue(kwargs["vad_filter"])
         self.assertEqual(download_model.call_args.kwargs["output_dir"], str(Path(temp_dir) / "models" / "large-v3"))
+
+    def test_reuses_the_same_loaded_model_for_matching_gpu_settings(self) -> None:
+        whisper_model = MagicMock()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_dir = Path(temp_dir) / "models"
+            (model_dir / "large-v3").mkdir(parents=True)
+            (model_dir / "large-v3" / "model.bin").write_bytes(b"model")
+            test_settings = SimpleNamespace(
+                whisper_device="cuda",
+                whisper_compute_type="float16",
+                whisper_initial_prompt="",
+                whisper_model="large-v3",
+                whisper_model_dir=model_dir,
+            )
+            _MODEL_CACHE.clear()
+            with (
+                patch("faster_whisper.WhisperModel", return_value=whisper_model) as model_class,
+                patch("transcript_bot.whisper_local.settings", test_settings),
+            ):
+                first = load_whisper_model()
+                second = load_whisper_model()
+            _MODEL_CACHE.clear()
+
+        self.assertIs(first, second)
+        model_class.assert_called_once()
 
 
 if __name__ == "__main__":

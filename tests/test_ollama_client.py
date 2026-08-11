@@ -63,10 +63,15 @@ class OllamaPolishTests(unittest.TestCase):
     def test_connection_failure_has_actionable_error(self) -> None:
         with (
             patch("transcript_bot.ollama_client.settings", self.settings),
-            patch("transcript_bot.ollama_client.httpx.post", side_effect=httpx.ConnectError("offline")),
+            patch("transcript_bot.ollama_client.httpx.post", side_effect=httpx.ConnectError("offline")) as post,
+            patch("transcript_bot.retry.time.sleep") as sleep,
         ):
             with self.assertRaises(OllamaError):
                 polish_with_ollama("Speaker 1: Original content")
+
+        self.assertEqual(post.call_count, 3)
+        self.assertEqual(sleep.call_args_list[0].args, (1.0,))
+        self.assertEqual(sleep.call_args_list[1].args, (2.0,))
 
     def test_keeps_source_when_model_reports_uncertainty(self) -> None:
         response = MagicMock(status_code=200)

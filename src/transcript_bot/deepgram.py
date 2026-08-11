@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from transcript_bot.config import settings
+from transcript_bot.retry import request_with_retry
 from transcript_bot.transcription import TranscriptSegment
 
 
@@ -29,14 +30,20 @@ def transcribe_with_deepgram(audio_path: Path, word_timestamps: bool = False) ->
         "Content-Type": "audio/mpeg",
     }
 
-    with audio_path.open("rb") as audio_file:
-        response = httpx.post(
+    try:
+        audio_content = audio_path.read_bytes()
+        response = request_with_retry(
+            lambda: httpx.post(
             "https://api.deepgram.com/v1/listen",
             params=params,
             headers=headers,
-            content=audio_file.read(),
+                content=audio_content,
             timeout=settings.deepgram_timeout,
+            ),
+            action="Deepgram 轉錄",
         )
+    except httpx.RequestError as exc:
+        raise DeepgramError("Deepgram API 暫時無法連線，請稍後再試。") from exc
 
     if response.status_code >= 400:
         raise DeepgramError(_format_deepgram_error(response))

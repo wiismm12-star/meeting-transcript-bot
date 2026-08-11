@@ -96,6 +96,26 @@ class LocalWebCorrectionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("telegram-new", response.get_json()["jobs"])
 
+    def test_index_shows_a_persisted_safe_web_transcription_error(self) -> None:
+        failed_id = "web-failed"
+        create_meeting(
+            self.data_dir,
+            MeetingRecord(
+                id=failed_id, user_id=0, source_platform="local_web",
+                audio_file_path=str(self.audio_path), normalized_audio_path="",
+                transcript_txt_path="", transcript_docx_path="",
+            ),
+        )
+        write_job_status(
+            self.data_dir, failed_id, source="web", step="error", pct=0,
+            label="error (本機 Whisper 轉錄失敗，請確認 GPU 記憶體或改用 CPU INT8 後重試)",
+        )
+
+        page = self.client.get("/")
+
+        self.assertIn("轉錄失敗".encode(), page.data)
+        self.assertIn("改用 CPU INT8 後重試".encode(), page.data)
+
     def test_index_and_api_show_telegram_bot_status_without_secrets(self) -> None:
         (self.data_dir / "telegram_bot_status.json").write_text(
             json.dumps(

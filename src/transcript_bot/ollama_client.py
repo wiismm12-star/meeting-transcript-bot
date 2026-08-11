@@ -8,6 +8,7 @@ from difflib import SequenceMatcher
 import httpx
 
 from transcript_bot.config import settings
+from transcript_bot.retry import request_with_retry
 
 
 class OllamaError(RuntimeError):
@@ -244,7 +245,7 @@ def _ollama_chat_json(system_prompt: str, user_content: str, timeout: float) -> 
     or a ``{"transcript": ...}``-style blob where the model ignored the schema.
     """
     try:
-        response = httpx.post(
+        response = request_with_retry(lambda: httpx.post(
             f"{settings.ollama_base_url.rstrip('/')}/api/chat",
             json={
                 "model": settings.ollama_text_model,
@@ -258,7 +259,7 @@ def _ollama_chat_json(system_prompt: str, user_content: str, timeout: float) -> 
                 "options": {"temperature": 0.1},
             },
             timeout=timeout,
-        )
+        ), action="Ollama 會議摘要")
     except httpx.RequestError as exc:
         raise OllamaError("找不到本機 Ollama 服務，無法產生會議摘要。") from exc
 
@@ -340,7 +341,7 @@ def _shorten_for_merge(text: str, limit: int = 120) -> str:
 
 def _polish_paragraph(source: str) -> str:
     try:
-        response = httpx.post(
+        response = request_with_retry(lambda: httpx.post(
             f"{settings.ollama_base_url.rstrip('/')}/api/chat",
             json={
                 "model": settings.ollama_text_model,
@@ -353,7 +354,7 @@ def _polish_paragraph(source: str) -> str:
                 "options": {"temperature": 0.0},
             },
             timeout=180.0,
-        )
+        ), action="Ollama 潤稿")
     except httpx.RequestError as exc:
         raise OllamaError(
             "找不到本機 Ollama 服務。請確認 Ollama 已安裝並正在執行，再重新傳送音檔。"

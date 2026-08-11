@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from transcript_bot.config import settings
+from transcript_bot.retry import request_with_retry
 from transcript_bot.transcription import TranscriptSegment
 
 
@@ -27,25 +28,40 @@ def transcribe_with_gladia(audio_path: Path) -> list[TranscriptSegment]:
     headers = {"x-gladia-key": settings.gladia_api_key}
     job_id = ""
     try:
-        with audio_path.open("rb") as audio_file:
-            upload = httpx.post(
-                f"{_API_URL}/upload",
-                headers=headers,
-                files={"audio": (audio_path.name, audio_file, "audio/mpeg")},
-                timeout=300,
-            )
+        def upload_request():
+            # Reopen the stream for each retry; otherwise the second request
+            # would upload an already-consumed file object.
+            with audio_path.open("rb") as audio_file:
+                return httpx.post(
+                    f"{_API_URL}/upload",
+                    headers=headers,
+                    files={"audio": (audio_path.name, audio_file, "audio/mpeg")},
+                    timeout=300,
+                )
+
+        try:
+            upload = request_with_retry(upload_request, action="Gladia 音檔上傳")
+        except httpx.RequestError as exc:
+            raise GladiaError("Gladia 暫時無法連線，請稍後再試。") from exc
         _raise_for_error(upload, "上傳音檔")
         audio_url = str(upload.json().get("audio_url") or "")
         if not audio_url:
             raise GladiaError("Gladia 上傳完成後未回傳音檔位置。")
 
         request_payload = _transcription_payload(audio_url)
-        created = httpx.post(
-            f"{_API_URL}/pre-recorded",
-            headers={**headers, "Content-Type": "application/json"},
-            json=request_payload,
-            timeout=60,
-        )
+        try:
+            created = request_with_retry(
+                lambda: httpx.post(
+                    f"{_API_URL}/pre-recorded",
+                    headers={**headers, "Content-Type": "application/json"},
+                    json=request_payload,
+                    timeout=60,
+                ),
+                action="Gladia 建立轉錄工作",
+                retry_request_errors=False,
+            )
+        except httpx.RequestError as exc:
+            raise GladiaError("Gladia 建立轉錄工作時連線中斷，請稍後重新傳送音檔。") from exc
         _raise_for_error(created, "建立轉錄工作")
         job_id = str(created.json().get("id") or "")
         if not job_id:
@@ -84,7 +100,13 @@ def _transcription_payload(audio_url: str) -> dict[str, Any]:
 def _wait_for_result(job_id: str, headers: dict[str, str]) -> dict[str, Any]:
     # Long recordings can take many minutes; cap at 30 minutes of polling.
     for _ in range(1800):
-        response = httpx.get(f"{_API_URL}/pre-recorded/{job_id}", headers=headers, timeout=60)
+        try:
+            response = request_with_retry(
+                lambda: httpx.get(f"{_API_URL}/pre-recorded/{job_id}", headers=headers, timeout=60),
+                action="Gladia 讀取轉錄結果",
+            )
+        except httpx.RequestError as exc:
+            raise GladiaError("Gladia 暫時無法連線，請稍後再試。") from exc
         _raise_for_error(response, "讀取轉錄結果")
         payload = response.json()
         status = str(payload.get("status") or "").lower()

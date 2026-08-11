@@ -241,7 +241,18 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
         active_meetings = [m for m in meetings if not m.transcript_text]
         done_meetings = [m for m in meetings if m.transcript_text]
         telegram_jobs = list_active_job_statuses(app.config["DATA_DIR"])
-        visible_jobs = {**_job_progress, **telegram_jobs}
+        # A failed local-Web worker has already left ``_job_progress``. Keep
+        # its safe, persisted message visible instead of reducing it to the
+        # ambiguous "轉錄未完成" card after a page refresh or server restart.
+        web_failures = {
+            meeting.id: status
+            for meeting in active_meetings
+            if (status := get_job_status(app.config["DATA_DIR"], meeting.id))
+            and status.get("source") == "web"
+            and status.get("step") == "error"
+        }
+        visible_jobs = {**web_failures, **_job_progress, **telegram_jobs}
+        polling_jobs = set(_job_progress) | set(telegram_jobs)
         return render_template(
             "index.html",
             active_meetings=active_meetings,
@@ -251,6 +262,7 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
             cancelled=request.args.get("cancelled") == "1",
             active_jobs={**_active_jobs, **telegram_jobs},
             job_progress=visible_jobs,
+            polling_jobs=sorted(polling_jobs),
             telegram_status=get_telegram_bot_status(app.config["DATA_DIR"]),
             google_login=app.config["GOOGLE_LOGIN"] and not is_lan_bypass_request(),
             web_allow_upload=settings.web_allow_upload,
@@ -913,10 +925,17 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         _job_progress[job_id] = {"step": "done", "pct": 100, "label": "done (完成)"}
         succeeded = True
 
-    except Exception:
+    except Exception as exc:
         import logging
         logging.getLogger("transcript_bot.web").exception("轉錄失敗 job=%s", job_id)
-        _job_progress[job_id] = {"step": "error", "pct": 0, "label": "error (轉錄失敗，請重試)"}
+        label = f"error ({_safe_transcription_error(exc)})"
+        _job_progress[job_id] = {"step": "error", "pct": 0, "label": label}
+        # Web jobs used to retain failure state only in process memory.  Once
+        # the worker exited, the UI could not tell a genuine failure from an
+        # unfinished task. Persist a non-sensitive explanation for the card.
+        write_job_status(
+            Path(data_dir), job_id, source="web", step="error", pct=0, label=label
+        )
     finally:
         if is_line_job:
             write_job_status(
@@ -938,6 +957,20 @@ def _restore_speaker_labels(text: str, aliases: dict[str, str]) -> str:
         text = text.replace(f"{display_name}：", f"{original_label}：")
         text = text.replace(f"{display_name}:", f"{original_label}：")
     return text
+
+
+def _safe_transcription_error(exc: Exception) -> str:
+    """Return a user-actionable error without exposing paths, tokens, or traces."""
+    from transcript_bot.pyannote_diarization import PyannoteDiarizationError
+    from transcript_bot.whisper_local import LocalWhisperError
+
+    if isinstance(exc, LocalWhisperError):
+        return "本機 Whisper 轉錄失敗，請確認 GPU 記憶體或改用 CPU INT8 後重試"
+    if isinstance(exc, PyannoteDiarizationError):
+        return "語者分離失敗，請確認 GPU 記憶體、Hugging Face Token 與模型權限"
+    if isinstance(exc, AudioProcessingError):
+        return "音檔處理失敗，請確認檔案可正常播放後重試"
+    return "轉錄處理失敗，請稍後重試"
 
 
 def _sync_polished_segments(transcript_text: str, segments: list) -> list:
@@ -1006,8 +1039,10 @@ def _purge_orphaned_meetings(data_dir: str) -> None:
     """Delete meetings with empty transcript that have no active background thread (leftover from killed server)."""
     meetings = list_local_meeting_exports(data_dir)
     for meeting in meetings:
+        status = get_job_status(Path(data_dir), meeting.id)
         if (not meeting.transcript_text and meeting.id not in _active_jobs
-                and not is_job_active(get_job_status(Path(data_dir), meeting.id))):
+                and not is_job_active(status)
+                and not (status and status.get("source") == "web" and status.get("step") == "error")):
             _delete_local_meeting_files(data_dir, meeting.id)
             delete_meeting(data_dir, meeting.id, meeting.user_id)
 
