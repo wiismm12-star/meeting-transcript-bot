@@ -54,8 +54,8 @@ def list_active_job_statuses(data_dir: Path) -> dict[str, dict]:
 
 
 def is_job_active(status: dict | None) -> bool:
-    """A status belongs to a live Telegram worker, not a killed predecessor."""
-    if not status or status.get("source") != "telegram" or status.get("step") in {"done", "error", "cancelled"}:
+    """A status belongs to a live Telegram or LINE worker, not a killed predecessor."""
+    if not status or status.get("source") not in {"telegram", "line"} or status.get("step") in {"done", "error", "cancelled"}:
         return False
     owner_pid = status.get("owner_pid")
     if not isinstance(owner_pid, int):

@@ -3,11 +3,16 @@ from __future__ import annotations
 import json
 import collections
 import hashlib
+import hmac
+import ipaddress
+import secrets
 import threading
 from pathlib import Path
 import shutil
+from urllib.parse import urlencode, urlparse
+from urllib.request import Request, urlopen
 
-from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, url_for
+from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_file, session, url_for
 from werkzeug.utils import secure_filename
 
 from transcript_bot.audio import AudioProcessingError, get_audio_duration, normalize_audio
@@ -15,14 +20,19 @@ from transcript_bot.config import settings
 from transcript_bot.database import (
     MeetingRecord,
     create_meeting,
+    create_meeting_claim,
+    claim_meeting,
     delete_meeting,
     find_matching_local_meeting,
     get_local_meeting_export,
     get_local_meeting_audio_path,
+    get_meeting_export,
+    get_or_create_web_identity,
     get_meeting_segments,
     get_meeting_speaker_labels,
     get_speaker_aliases,
     init_database,
+    list_meeting_exports,
     list_local_meeting_exports,
     replace_speaker_aliases,
     save_transcript_segments,
@@ -54,7 +64,7 @@ from transcript_bot.line_bot import (
     reply_to_line,
     verify_webhook_signature,
 )
-from transcript_bot.job_status import get_job_status, is_job_active, list_active_job_statuses, request_cancel
+from transcript_bot.job_status import clear_job_status, get_job_status, is_job_active, list_active_job_statuses, request_cancel, write_job_status
 
 # Module-level job tracking for async transcription
 _active_jobs: dict[str, threading.Thread] = {}
@@ -94,7 +104,7 @@ def get_telegram_bot_status(data_dir: Path) -> dict[str, str]:
 
 
 def create_web_app(data_dir: Path | None = None) -> Flask:
-    """Create a correction interface intended exclusively for this computer."""
+    """Create the local workspace, optionally protected by Google OAuth."""
     active_data_dir = data_dir or settings.data_dir
     ensure_data_dirs(active_data_dir)
     init_database(active_data_dir)
@@ -104,17 +114,130 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
 
     app = Flask(__name__)
     app.config["DATA_DIR"] = active_data_dir
+    app.config["GOOGLE_LOGIN"] = bool(settings.enable_google_login)
+    if app.config["GOOGLE_LOGIN"]:
+        missing = [name for name, value in {
+            "GOOGLE_OAUTH_CLIENT_ID": settings.google_oauth_client_id,
+            "GOOGLE_OAUTH_CLIENT_SECRET": settings.google_oauth_client_secret,
+            "GOOGLE_OAUTH_REDIRECT_URI": settings.google_oauth_redirect_uri,
+            "WEB_SESSION_SECRET": settings.web_session_secret,
+        }.items() if not value]
+        if missing:
+            raise RuntimeError("啟用 Google 登入時缺少環境變數：" + ", ".join(missing))
+        if settings.web_host not in {"127.0.0.1", "::1", "localhost"} and not settings.web_lan_bypass_google_login:
+            raise RuntimeError("啟用 Google 登入時，WEB_HOST 必須是 127.0.0.1、::1 或 localhost；如需內網免登入，請明確啟用 WEB_LAN_BYPASS_GOOGLE_LOGIN。")
+        app.secret_key = settings.web_session_secret
+        app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=True)
+    else:
+        app.secret_key = settings.web_session_secret or "local-workspace-no-auth"
     app.jinja_env.auto_reload = True  # always reload templates in dev
     app.add_template_filter(lambda p: Path(p).stem if p else "", "basename")
+
+    def current_user_id() -> int:
+        user_id = session.get("web_user_id")
+        if not isinstance(user_id, int):
+            abort(401)
+        return user_id
+
+    def is_lan_bypass_request() -> bool:
+        """Allow the explicitly configured private-network shared workspace.
+
+        ngrok forwards to loopback, so source IP alone would accidentally
+        exempt external requests.  The public tunnel host is therefore always
+        authenticated, even though its final local hop is 127.0.0.1.
+        """
+        if not app.config["GOOGLE_LOGIN"] or not settings.web_lan_bypass_google_login:
+            return False
+        public_host = (urlparse(settings.public_web_base_url).hostname or "").lower()
+        request_host = request.host.split(":", 1)[0].lower()
+        if public_host and request_host == public_host:
+            return False
+        try:
+            remote = ipaddress.ip_address(request.remote_addr or "")
+            trusted = [ipaddress.ip_network(value.strip()) for value in settings.web_lan_trusted_cidrs.split(",") if value.strip()]
+        except ValueError:
+            app.logger.error("Invalid WEB_LAN_TRUSTED_CIDRS configuration")
+            return False
+        return any(remote in network for network in trusted)
+
+    def meeting_for_request(meeting_id: str):
+        if app.config["GOOGLE_LOGIN"] and not is_lan_bypass_request():
+            return get_meeting_export(app.config["DATA_DIR"], meeting_id, current_user_id())
+        return get_local_meeting_export(app.config["DATA_DIR"], meeting_id)
+
+    def meetings_for_request():
+        if app.config["GOOGLE_LOGIN"] and not is_lan_bypass_request():
+            return list_meeting_exports(app.config["DATA_DIR"], current_user_id())
+        return list_local_meeting_exports(app.config["DATA_DIR"])
+
+    @app.before_request
+    def _require_google_login():
+        if not app.config["GOOGLE_LOGIN"] or is_lan_bypass_request():
+            return None
+        if request.endpoint in {"line_webhook", "login", "google_callback", "static"}:
+            return None
+        if "web_user_id" not in session:
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "authentication required"}), 401
+            return redirect(url_for("login", next=request.full_path))
+        g.web_user_id = current_user_id()
+        return None
 
     @app.after_request
     def _no_cache(response):
         response.headers["Cache-Control"] = "no-store, must-revalidate"
         return response
 
+    @app.get("/login")
+    def login():
+        if not app.config["GOOGLE_LOGIN"]:
+            abort(404)
+        state = secrets.token_urlsafe(32)
+        session["oauth_state"] = state
+        session["oauth_next"] = request.args.get("next", "/")
+        query = urlencode({
+            "client_id": settings.google_oauth_client_id,
+            "redirect_uri": settings.google_oauth_redirect_uri,
+            "response_type": "code",
+            "scope": "openid email profile",
+            "state": state,
+            "prompt": "select_account",
+        })
+        return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + query)
+
+    @app.get("/auth/google/callback")
+    def google_callback():
+        if not app.config["GOOGLE_LOGIN"]:
+            abort(404)
+        if request.args.get("error") or not hmac.compare_digest(str(session.pop("oauth_state", "")), request.args.get("state", "")):
+            abort(400)
+        code = request.args.get("code", "")
+        try:
+            payload = urlencode({"code": code, "client_id": settings.google_oauth_client_id, "client_secret": settings.google_oauth_client_secret, "redirect_uri": settings.google_oauth_redirect_uri, "grant_type": "authorization_code"}).encode()
+            token_response = urlopen(Request("https://oauth2.googleapis.com/token", data=payload, headers={"Content-Type": "application/x-www-form-urlencoded"}), timeout=15)
+            token = json.loads(token_response.read().decode("utf-8"))["access_token"]
+            profile = json.loads(urlopen(Request("https://openidconnect.googleapis.com/v1/userinfo", headers={"Authorization": f"Bearer {token}"}), timeout=15).read().decode("utf-8"))
+        except Exception:
+            app.logger.exception("Google OAuth callback failed")
+            abort(502)
+        email = str(profile.get("email") or "").strip().lower()
+        subject = str(profile.get("sub") or "").strip()
+        allowed_domain = settings.google_oauth_allowed_domain.strip().lower()
+        if not subject or not email or not profile.get("email_verified") or (allowed_domain and not email.endswith("@" + allowed_domain)):
+            abort(403)
+        next_url = str(session.get("oauth_next", "/"))
+        session.clear()
+        session["web_user_id"] = get_or_create_web_identity(app.config["DATA_DIR"], "google", subject, email, str(profile.get("name") or email)[:160])
+        return redirect(next_url if next_url.startswith("/") and not next_url.startswith("//") else "/")
+
+    @app.post("/logout")
+    def logout():
+        session.clear()
+        return redirect(url_for("index"))
+
     @app.get("/")
     def index():
-        meetings = list_local_meeting_exports(app.config["DATA_DIR"])
+        meetings = meetings_for_request()
         active_meetings = [m for m in meetings if not m.transcript_text]
         done_meetings = [m for m in meetings if m.transcript_text]
         telegram_jobs = list_active_job_statuses(app.config["DATA_DIR"])
@@ -129,6 +252,8 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
             active_jobs={**_active_jobs, **telegram_jobs},
             job_progress=visible_jobs,
             telegram_status=get_telegram_bot_status(app.config["DATA_DIR"]),
+            google_login=app.config["GOOGLE_LOGIN"] and not is_lan_bypass_request(),
+            web_allow_upload=settings.web_allow_upload,
         )
 
     @app.get("/api/telegram/status")
@@ -137,6 +262,8 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
 
     @app.post("/upload")
     def upload_audio():
+        if not settings.web_allow_upload:
+            abort(404)
         uploaded_file = request.files.get("audio_file")
         if not uploaded_file or not uploaded_file.filename:
             return redirect(url_for("index", error="請選擇一個音檔。"))
@@ -155,7 +282,7 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
                 app.config["DATA_DIR"],
                 MeetingRecord(
                     id=paths.job_id,
-                    user_id=0,
+                    user_id=current_user_id() if app.config["GOOGLE_LOGIN"] and not is_lan_bypass_request() else 0,
                     source_platform="local_web",
                     audio_file_path=str(paths.input_audio),
                     normalized_audio_path=str(paths.normalized_audio),
@@ -213,13 +340,13 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
 
     @app.route("/meetings/<meeting_id>", methods=["GET", "POST"])
     def edit_meeting(meeting_id: str):
-        meeting = get_local_meeting_export(app.config["DATA_DIR"], meeting_id)
+        meeting = meeting_for_request(meeting_id)
         if not meeting:
             abort(404)
         if _repair_overlong_segments(app.config["DATA_DIR"], meeting):
             # Refresh the cached record so the page and downloads use the same
             # repaired, bounded rows.
-            meeting = get_local_meeting_export(app.config["DATA_DIR"], meeting_id)
+            meeting = meeting_for_request(meeting_id)
             if not meeting:
                 abort(404)
 
@@ -240,7 +367,7 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
             return render_template(
                 "edit_meeting.html",
                 meeting=meeting,
-                sidebar_meetings=list_local_meeting_exports(app.config["DATA_DIR"]),
+                sidebar_meetings=meetings_for_request(),
                 segments=get_meeting_segments(app.config["DATA_DIR"], meeting.id, meeting.user_id),
                 speaker_labels=labels,
                 aliases=aliases,
@@ -342,6 +469,8 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
 
     @app.get("/meetings/<meeting_id>/audio")
     def meeting_audio(meeting_id: str):
+        if not meeting_for_request(meeting_id):
+            abort(404)
         audio_path = get_local_meeting_audio_path(app.config["DATA_DIR"], meeting_id)
         if not audio_path:
             abort(404)
@@ -349,7 +478,7 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
 
     @app.post("/meetings/<meeting_id>/delete")
     def delete_local_meeting(meeting_id: str):
-        meeting = get_local_meeting_export(app.config["DATA_DIR"], meeting_id)
+        meeting = meeting_for_request(meeting_id)
         if not meeting:
             abort(404)
 
@@ -388,7 +517,7 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
         meeting_ids = list(dict.fromkeys(item.strip() for item in request.form.getlist("meeting_ids") if item.strip()))
         deleted_count = 0
         for meeting_id in meeting_ids:
-            meeting = get_local_meeting_export(app.config["DATA_DIR"], meeting_id)
+            meeting = meeting_for_request(meeting_id)
             if not meeting:
                 continue
             _delete_local_meeting_files(app.config["DATA_DIR"], meeting.id)
@@ -398,7 +527,7 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
 
     @app.get("/meetings/<meeting_id>/download/<file_type>")
     def download_transcript(meeting_id: str, file_type: str):
-        meeting = get_local_meeting_export(app.config["DATA_DIR"], meeting_id)
+        meeting = meeting_for_request(meeting_id)
         if not meeting or file_type not in {"txt", "docx"}:
             abort(404)
 
@@ -426,6 +555,8 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
     @app.get("/api/jobs/<job_id>/progress")
     def job_progress(job_id: str):
         """Return transcription progress as JSON for JS polling."""
+        if not meeting_for_request(job_id):
+            abort(404)
         prog = _job_progress.get(job_id) or get_job_status(app.config["DATA_DIR"], job_id)
         if not prog:
             return jsonify({"active": False})
@@ -444,7 +575,20 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
     def active_jobs():
         """Expose active job IDs so an idle home page notices new Telegram work."""
         telegram_jobs = list_active_job_statuses(app.config["DATA_DIR"])
-        return jsonify({"jobs": sorted(set(_job_progress) | set(telegram_jobs))})
+        visible = set(_job_progress) | set(telegram_jobs)
+        if app.config["GOOGLE_LOGIN"] and not is_lan_bypass_request():
+            visible = {job_id for job_id in visible if get_meeting_export(app.config["DATA_DIR"], job_id, current_user_id())}
+        return jsonify({"jobs": sorted(visible)})
+
+    @app.route("/meetings/<meeting_id>/claim/<token>", methods=["GET", "POST"])
+    def claim_meeting_route(meeting_id: str, token: str):
+        if not app.config["GOOGLE_LOGIN"]:
+            abort(404)
+        if request.method == "POST":
+            if not claim_meeting(app.config["DATA_DIR"], meeting_id, token, current_user_id()):
+                abort(410)
+            return redirect(url_for("edit_meeting", meeting_id=meeting_id))
+        return render_template("claim_meeting.html", meeting_id=meeting_id, token=token)
 
     return app
 
@@ -491,6 +635,7 @@ def _start_line_media_download(data_dir: Path, event: dict, access_token: str) -
         ),
     )
     update_meeting_metadata(data_dir, paths.job_id, Path(filename).stem[:160], "")
+    write_job_status(data_dir, paths.job_id, source="line", step="downloading", pct=0, label="downloading (從 LINE 下載音檔)")
     cancel_event = threading.Event()
     _cancel_flags[paths.job_id] = cancel_event
     line_user_id = str((event.get("source") or {}).get("userId") or "")
@@ -530,15 +675,17 @@ def _download_line_media_and_enqueue(
         _enqueue_or_start(data_dir, paths.job_id, paths, filename, cancel_event)
     except LineBotError:
         _job_progress[paths.job_id] = {"step": "error", "pct": 0, "label": "error (無法從 LINE 下載音檔)"}
+        write_job_status(data_dir, paths.job_id, source="line", step="error", pct=0, label="error (無法從 LINE 下載音檔)")
         _active_jobs.pop(paths.job_id, None)
-        _notify_line_completion(paths.job_id, succeeded=False)
+        _notify_line_completion(paths.job_id, succeeded=False, data_dir=data_dir)
     except OSError:
         _job_progress[paths.job_id] = {"step": "error", "pct": 0, "label": "error (儲存 LINE 音檔失敗)"}
+        write_job_status(data_dir, paths.job_id, source="line", step="error", pct=0, label="error (儲存 LINE 音檔失敗)")
         _active_jobs.pop(paths.job_id, None)
-        _notify_line_completion(paths.job_id, succeeded=False)
+        _notify_line_completion(paths.job_id, succeeded=False, data_dir=data_dir)
 
 
-def _notify_line_completion(job_id: str, *, succeeded: bool) -> None:
+def _notify_line_completion(job_id: str, *, succeeded: bool, data_dir: Path | None = None) -> None:
     """Tell the originating LINE user that a background job has reached a terminal state."""
     notification = _line_notifications.pop(job_id, None)
     if not notification:
@@ -546,6 +693,9 @@ def _notify_line_completion(job_id: str, *, succeeded: bool) -> None:
     user_id, access_token, base_url = notification
     if not succeeded:
         text = "LINE 音檔轉錄失敗，請稍後重新傳送一次。"
+    elif getattr(settings, "enable_google_login", False) and getattr(settings, "public_web_base_url", ""):
+        token = create_meeting_claim(data_dir or Path(settings.data_dir), job_id)
+        text = "LINE 音檔已完成轉錄。請開啟此一次性連結，以 Google 帳號認領並查看／下載：\n" + str(settings.public_web_base_url).rstrip("/") + f"/meetings/{job_id}/claim/{token}"
     elif base_url:
         base = base_url.rstrip("/")
         text = (
@@ -620,6 +770,10 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
     """Background thread with progress tracking: normalize → transcribe → polish → save."""
     job_id = paths.job_id
     succeeded = False
+    meeting = get_local_meeting_export(Path(data_dir), job_id)
+    is_line_job = bool(meeting and meeting.user_id and meeting.user_id != 0 and get_job_status(Path(data_dir), job_id) and get_job_status(Path(data_dir), job_id).get("source") == "line")
+    if is_line_job:
+        write_job_status(Path(data_dir), job_id, source="line", step="loading", pct=0, label="loading (初始化)")
     _job_progress[job_id] = {"step": "loading", "pct": 0, "label": "loading (初始化)"}
 
     try:
@@ -760,7 +914,14 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         logging.getLogger("transcript_bot.web").exception("轉錄失敗 job=%s", job_id)
         _job_progress[job_id] = {"step": "error", "pct": 0, "label": "error (轉錄失敗，請重試)"}
     finally:
-        _notify_line_completion(job_id, succeeded=succeeded)
+        if is_line_job:
+            write_job_status(
+                Path(data_dir), job_id, source="line",
+                step="done" if succeeded else ("cancelled" if cancel_event.is_set() else "error"),
+                pct=100 if succeeded else 0,
+                label="done (完成)" if succeeded else "error (轉錄失敗或已取消)",
+            )
+        _notify_line_completion(job_id, succeeded=succeeded, data_dir=Path(data_dir))
         _active_jobs.pop(job_id, None)
         _cancel_flags.pop(job_id, None)
         _job_progress.pop(job_id, None)

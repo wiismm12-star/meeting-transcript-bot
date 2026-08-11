@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 import hashlib
+import secrets
+import time
 from dataclasses import dataclass
 from contextlib import contextmanager
 from pathlib import Path
@@ -97,6 +99,25 @@ def init_database(data_dir: Path) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_aliases_meeting_user
                 ON speaker_aliases(meeting_id, user_id);
+
+            CREATE TABLE IF NOT EXISTS web_identities (
+                user_id INTEGER PRIMARY KEY,
+                provider TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                email TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(provider, subject)
+            );
+
+            CREATE TABLE IF NOT EXISTS meeting_claims (
+                token_hash TEXT PRIMARY KEY,
+                meeting_id TEXT NOT NULL UNIQUE,
+                expires_at INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+            );
             """
         )
         _ensure_column(conn, "meetings", "transcript_text", "TEXT NOT NULL DEFAULT ''")
@@ -277,6 +298,79 @@ def get_local_meeting_export(data_dir: Path, meeting_id: str) -> MeetingExportRe
             (meeting_id,),
         ).fetchone()
     return _meeting_export_from_row(row)
+
+
+def list_meeting_exports(data_dir: Path, user_id: int, limit: int = 100) -> list[MeetingExportRecord]:
+    """List only records owned by one authenticated Web identity."""
+    with _connect(data_dir) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, user_id, created_at, title, notes, transcript_text, summary_text,
+                   action_text, transcript_txt_path, transcript_docx_path, audio_file_path
+            FROM meetings WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+    return [meeting for row in rows if (meeting := _meeting_export_from_row(row))]
+
+
+def get_or_create_web_identity(
+    data_dir: Path, provider: str, subject: str, email: str, display_name: str
+) -> int:
+    """Return a negative user id so OAuth identities cannot collide with bot IDs."""
+    with _connect(data_dir) as conn:
+        row = conn.execute(
+            "SELECT user_id FROM web_identities WHERE provider = ? AND subject = ?",
+            (provider, subject),
+        ).fetchone()
+        if row:
+            user_id = int(row["user_id"])
+            conn.execute(
+                "UPDATE web_identities SET email = ?, display_name = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+                (email, display_name, user_id),
+            )
+            return user_id
+        row = conn.execute("SELECT MIN(user_id) AS lowest FROM web_identities").fetchone()
+        user_id = min(-1, int(row["lowest"] or 0) - 1)
+        conn.execute(
+            "INSERT INTO web_identities (user_id, provider, subject, email, display_name) VALUES (?, ?, ?, ?, ?)",
+            (user_id, provider, subject, email, display_name),
+        )
+        return user_id
+
+
+def create_meeting_claim(data_dir: Path, meeting_id: str, *, ttl_seconds: int = 7 * 24 * 3600) -> str:
+    """Issue a one-time, stored-hashed claim token for a bot-originated meeting."""
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    with _connect(data_dir) as conn:
+        conn.execute("DELETE FROM meeting_claims WHERE meeting_id = ?", (meeting_id,))
+        conn.execute(
+            "INSERT INTO meeting_claims (token_hash, meeting_id, expires_at) VALUES (?, ?, ?)",
+            (token_hash, meeting_id, int(time.time()) + ttl_seconds),
+        )
+    return token
+
+
+def claim_meeting(data_dir: Path, meeting_id: str, token: str, user_id: int) -> bool:
+    """Atomically transfer one claimed bot meeting to an authenticated Web user."""
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    with _connect(data_dir) as conn:
+        claim = conn.execute(
+            "SELECT meeting_id, expires_at FROM meeting_claims WHERE token_hash = ?", (token_hash,)
+        ).fetchone()
+        if not claim or str(claim["meeting_id"]) != meeting_id or int(claim["expires_at"]) < int(time.time()):
+            return False
+        old_owner = conn.execute("SELECT user_id FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
+        if not old_owner:
+            return False
+        conn.execute("UPDATE meetings SET user_id = ? WHERE id = ?", (user_id, meeting_id))
+        conn.execute(
+            "UPDATE speaker_aliases SET user_id = ? WHERE meeting_id = ? AND user_id = ?",
+            (user_id, meeting_id, int(old_owner["user_id"])),
+        )
+        conn.execute("DELETE FROM meeting_claims WHERE token_hash = ?", (token_hash,))
+        return True
 
 
 def list_local_meeting_exports(data_dir: Path, limit: int = 100) -> list[MeetingExportRecord]:

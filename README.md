@@ -184,6 +184,56 @@ PYANNOTE_NUM_SPEAKERS=0
 
 `PYANNOTE_NUM_SPEAKERS=0` 代表自動估計人數；已知是四人會議時，可設為 `4`。
 
+## 公開工作台：Google 登入與資料隔離（ngrok）
+
+這是選用的公開模式：語音辨識、潤稿、SQLite 與檔案都仍留在這台 Windows 電腦；ngrok 只把已登入的工作台頁面轉送到本機。不要把 `8765` 直接做 Port Forwarding。
+
+1. 安裝並登入 ngrok，取得 Free 方案分配的固定 `*.ngrok-free.app` 開發網域。
+2. 在 Google Cloud 的 OAuth 網頁用戶端，新增「已授權的重新導向 URI」：
+
+```text
+https://你的-ngrok-free.app/auth/google/callback
+```
+
+3. 在 `.env` 設定（請勿把 secret 提交到 Git）：
+
+```env
+ENABLE_GOOGLE_LOGIN=true
+WEB_HOST=127.0.0.1
+WEB_PORT=8765
+WEB_SESSION_SECRET=使用隨機產生的長字串
+GOOGLE_OAUTH_CLIENT_ID=你的_client_id
+GOOGLE_OAUTH_CLIENT_SECRET=你的_client_secret
+GOOGLE_OAUTH_REDIRECT_URI=https://你的-ngrok-free.app/auth/google/callback
+PUBLIC_WEB_BASE_URL=https://你的-ngrok-free.app
+# Telegram／LINE 仍負責上傳；公開網頁只查看進度與下載。
+WEB_ALLOW_UPLOAD=false
+```
+
+如只允許公司 Google Workspace 帳號，可加上 `GOOGLE_OAUTH_ALLOWED_DOMAIN=公司網域`。接著啟動 Web 工作台，並在另一個 PowerShell 建立 Tunnel：
+
+```powershell
+ngrok http 8765
+```
+
+ngrok Free 的瀏覽器頁面會先顯示一次 ngrok 提示頁；使用者按「Visit」後，該網域的瀏覽器會在 7 天內略過它。這是 Free 方案的限制，不影響本機的轉錄運算。
+
+每個 Google 帳號只會看到自己建立或認領的會議。Telegram／LINE 身分與 Google 帳號並非同一個帳號，因此 Bot 會在完成通知中提供 7 天有效、只能使用一次的認領連結；使用者以 Google 登入後按下確認，該會議才會歸到該帳號。這避免僅憑會議 ID 或猜測網址就讀取他人的資料。
+
+LINE webhook 仍應維持原本只轉送 `/line/webhook` 的 8766 Tunnel；不要改為把未保護的 8765 直接公開。公開模式下，LINE 完成通知會改送認領連結，不再送可直接下載的連結。
+
+### 同時提供公司內網免登入入口（選用）
+
+若內網可使用 `http://172.16.10.25:8765`，但公開 ngrok 網址仍必須 Google 登入，可設定：
+
+```env
+WEB_HOST=0.0.0.0
+WEB_LAN_BYPASS_GOOGLE_LOGIN=true
+WEB_LAN_TRUSTED_CIDRS=172.16.0.0/12
+```
+
+內網入口是共用工作台：內網使用者能看到、編輯與刪除彼此的會議；只有 ngrok 公開網址有每個 Google 帳號的資料隔離。請勿在路由器對 8765 設定 Port Forwarding。
+
 ## LINE Bot（webhook 與音檔轉錄）
 
 LINE Bot 會先驗證安全 webhook；收到 LINE 音訊、影片或支援格式的音檔後，會立即回覆已開始背景轉錄，並將檔案交給與 Web 上傳共用的工作佇列。完成的逐字稿可在本機會議工作台查看、編輯與下載。

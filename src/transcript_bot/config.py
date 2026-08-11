@@ -52,6 +52,21 @@ class Settings(BaseSettings):
     # A phone-reachable base URL used only in LINE completion messages. Leave
     # empty to keep completed transcripts inside the local workspace.
     line_download_base_url: str = ""
+    # Public workspace mode is deliberately opt-in.  When enabled, the Web
+    # process must stay on loopback and be exposed only through a HTTPS tunnel.
+    enable_google_login: bool = False
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    google_oauth_redirect_uri: str = ""
+    google_oauth_allowed_domain: str = ""
+    web_session_secret: str = ""
+    public_web_base_url: str = ""
+    web_allow_upload: bool = True
+    # Optional dual-access mode: direct private-network requests can use the
+    # shared LAN workspace without Google, while the public tunnel still
+    # requires Google login.
+    web_lan_bypass_google_login: bool = False
+    web_lan_trusted_cidrs: str = "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     enable_pyannote_diarization: bool = False
     pyannote_hf_token: str = ""
     pyannote_num_speakers: int = 0

@@ -29,6 +29,7 @@ from transcript_bot.database import (
     MeetingRecord,
     SpeakerSample,
     create_meeting,
+    create_meeting_claim,
     delete_meeting,
     get_latest_meeting_id,
     get_meeting_export,
@@ -479,9 +480,16 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             else polished_text
         )
 
+        claim_text = ""
+        if settings.enable_google_login and settings.public_web_base_url:
+            token = create_meeting_claim(settings.data_dir, paths.job_id)
+            claim_text = (
+                "\n\n要在公開工作台查看與下載，請先以 Google 帳號認領：\n"
+                f"{settings.public_web_base_url.rstrip('/')}/meetings/{paths.job_id}/claim/{token}"
+            )
         await message.reply_text(
             f"會議 ID：{paths.job_id}\n\n{_summary_preview(summary)}\n\n"
-            f"逐字稿預覽：\n{_preview_text(displayed_text)}\n\n請選擇要輸出的檔案：",
+            f"逐字稿預覽：\n{_preview_text(displayed_text)}{claim_text}\n\n請選擇要輸出的檔案：",
             reply_markup=_export_keyboard(paths.job_id),
         )
     except asyncio.CancelledError:

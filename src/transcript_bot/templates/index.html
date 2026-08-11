@@ -2,11 +2,11 @@
 {% block title %}本機逐字稿校稿{% endblock %}
 {% block content %}
   <section class="home-hero">
-    <div><p class="eyebrow">LOCAL MEETING WORKBENCH</p><h1>本機逐字稿校稿</h1><p class="hero-copy">上傳錄音、校對逐字稿，將每一場會議整理成可閱讀的紀錄。</p><p class="local-badge"><span>●</span> 僅限本機使用 · 127.0.0.1</p><p id="telegram-status" class="telegram-badge {{ telegram_status.state }}"><span>●</span> Telegram Bot · <strong>{{ telegram_status.label }}</strong><small>{{ telegram_status.message }}</small></p></div>
+    <div><p class="eyebrow">{{ 'PRIVATE MEETING WORKBENCH' if google_login else 'LOCAL MEETING WORKBENCH' }}</p><h1>本機逐字稿校稿</h1><p class="hero-copy">{{ '僅顯示目前 Google 帳號已認領的會議。' if google_login else '上傳錄音、校對逐字稿，將每一場會議整理成可閱讀的紀錄。' }}</p><p class="local-badge"><span>●</span>{{ ' Google 登入保護' if google_login else ' 僅限本機使用 · 127.0.0.1' }}</p><p id="telegram-status" class="telegram-badge {{ telegram_status.state }}"><span>●</span> Telegram Bot · <strong>{{ telegram_status.label }}</strong><small>{{ telegram_status.message }}</small></p></div>
     <div class="hero-mark" aria-hidden="true"><span>〰</span><i></i><i></i><i></i></div>
   </section>
   {% if upload_error %}<p class="error">{{ upload_error }}</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if deleted_count %}<p class="notice">已刪除 {{ deleted_count }} 場會議。</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if cancelled %}<p class="notice">已終止轉錄，音檔已釋放。</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if request.args.get('cancelling') %}<p class="notice">已提出終止要求；目前步驟結束後會清理音檔與會議資料。</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}{% if request.args.get('uploaded') %}<p class="notice">音檔已上傳，正在背景轉錄中…</p><script>history.replaceState(null, '', location.pathname);</script>{% endif %}
-  <section class="upload-panel">
+  {% if web_allow_upload %}<section class="upload-panel">
     <div class="section-heading"><div><p class="eyebrow">NEW TRANSCRIPT</p><h2>新增一場會議</h2></div><span class="format-note">m4a · mp3 · wav · ogg · webm · mp4 · aac</span></div>
     <form class="upload-form" method="post" action="{{ url_for('upload_audio') }}" enctype="multipart/form-data">
       <label class="file-drop" for="audio-file"><span class="upload-icon">↑</span><span><strong>選擇錄音檔</strong><small id="file-name">或將檔案拖放到這裡</small></span><input id="audio-file" type="file" name="audio_file" accept="audio/*,.m4a,.mp4,.webm" required></label>
@@ -18,7 +18,7 @@
   ['dragenter','dragover'].forEach(ev=>dropZone.addEventListener(ev,e=>{e.preventDefault();dropZone.classList.add('drag-over');}));
   ['dragleave','drop'].forEach(ev=>dropZone.addEventListener(ev,e=>{e.preventDefault();dropZone.classList.remove('drag-over');}));
   dropZone.addEventListener('drop',e=>{const files=e.dataTransfer.files;if(files.length){audioInput.files=files;fileName.textContent=files[0].name;}});
-  </script>
+  </script>{% endif %}
 
   {% if active_meetings or done_meetings %}
     {# ── 轉錄中 ── #}
