@@ -218,6 +218,18 @@ class LocalWebCorrectionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(get_local_meeting_export(self.data_dir, self.meeting_id))
 
+    def test_delete_meeting_removes_its_job_directory_when_audio_is_already_missing(self) -> None:
+        job_dir = self.data_dir / "jobs" / self.meeting_id
+        job_dir.mkdir(parents=True)
+        (job_dir / "download-error.txt").write_text("failed", encoding="utf-8")
+        self.audio_path.unlink()
+
+        response = self.client.post(f"/meetings/{self.meeting_id}/delete", follow_redirects=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(job_dir.exists())
+        self.assertIsNone(get_local_meeting_export(self.data_dir, self.meeting_id))
+
     def test_index_can_bulk_delete_selected_meetings(self) -> None:
         response = self.client.post(
             "/meetings/delete-selected",

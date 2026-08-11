@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     enable_line_bot: bool = False
     line_channel_secret: str = ""
     line_channel_access_token: str = ""
+    line_proxy_port: int = 8766
+    # A phone-reachable base URL used only in LINE completion messages. Leave
+    # empty to keep completed transcripts inside the local workspace.
+    line_download_base_url: str = ""
     enable_pyannote_diarization: bool = False
     pyannote_hf_token: str = ""
     pyannote_num_speakers: int = 0
@@ -113,6 +117,8 @@ class Settings(BaseSettings):
             raise RuntimeError("MAX_CONCURRENT_JOBS 必須是 1 或以上的正整數。")
         if not 1 <= self.web_port <= 65535:
             raise RuntimeError("WEB_PORT 必須介於 1 和 65535 之間。")
+        if not 1 <= self.line_proxy_port <= 65535:
+            raise RuntimeError("LINE_PROXY_PORT 必須介於 1 和 65535 之間。")
         if self.telegram_request_timeout < 1:
             raise RuntimeError("TELEGRAM_REQUEST_TIMEOUT 必須是正整數。")
 

@@ -9,6 +9,7 @@ import httpx
 
 
 LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
+LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 LINE_CONTENT_URL = "https://api-data.line.me/v2/bot/message/{message_id}/content"
 
 
@@ -34,6 +35,18 @@ def reply_to_line(reply_token: str, access_token: str, text: str) -> None:
     )
     if response.status_code >= 400:
         raise LineBotError("LINE Bot 回覆失敗，請確認 Channel access token 與 webhook 設定。")
+
+
+def push_text_to_line(user_id: str, access_token: str, text: str) -> None:
+    """Send an asynchronous completion notification after a long transcription."""
+    response = httpx.post(
+        LINE_PUSH_URL,
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"to": user_id, "messages": [{"type": "text", "text": text[:5000]}]},
+        timeout=15.0,
+    )
+    if response.status_code >= 400:
+        raise LineBotError("LINE Bot 完成通知傳送失敗。")
 
 
 def download_line_message_content(message_id: str, access_token: str) -> bytes:

@@ -30,6 +30,7 @@ whisper = [
 [project.scripts]
 transcript-bot = "transcript_bot.main:main"
 transcript-web = "transcript_bot.web:main"
+transcript-line-proxy = "transcript_bot.line_proxy:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

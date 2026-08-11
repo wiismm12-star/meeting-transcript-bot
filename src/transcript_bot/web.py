@@ -50,6 +50,7 @@ from transcript_bot.line_bot import (
     LineBotError,
     acknowledgement_for_event,
     download_line_message_content,
+    push_text_to_line,
     reply_to_line,
     verify_webhook_signature,
 )
@@ -63,6 +64,7 @@ _queued_payloads: dict[str, tuple] = {}  # {job_id: (data_dir, paths, original_f
 _job_queue: "collections.deque[str]" = collections.deque()
 _job_lock = threading.Lock()
 _running_count = 0  # number of currently running transcription threads
+_line_notifications: dict[str, tuple[str, str, str]] = {}
 
 _TELEGRAM_STATUS_LABELS = {
     "running": "運行中",
@@ -491,6 +493,13 @@ def _start_line_media_download(data_dir: Path, event: dict, access_token: str) -
     update_meeting_metadata(data_dir, paths.job_id, Path(filename).stem[:160], "")
     cancel_event = threading.Event()
     _cancel_flags[paths.job_id] = cancel_event
+    line_user_id = str((event.get("source") or {}).get("userId") or "")
+    if line_user_id:
+        _line_notifications[paths.job_id] = (
+            line_user_id,
+            access_token,
+            str(getattr(settings, "line_download_base_url", "")),
+        )
     _job_progress[paths.job_id] = {"step": "downloading", "pct": 0, "label": "downloading (從 LINE 下載音檔)"}
     thread = threading.Thread(
         target=_download_line_media_and_enqueue,
@@ -522,9 +531,36 @@ def _download_line_media_and_enqueue(
     except LineBotError:
         _job_progress[paths.job_id] = {"step": "error", "pct": 0, "label": "error (無法從 LINE 下載音檔)"}
         _active_jobs.pop(paths.job_id, None)
+        _notify_line_completion(paths.job_id, succeeded=False)
     except OSError:
         _job_progress[paths.job_id] = {"step": "error", "pct": 0, "label": "error (儲存 LINE 音檔失敗)"}
         _active_jobs.pop(paths.job_id, None)
+        _notify_line_completion(paths.job_id, succeeded=False)
+
+
+def _notify_line_completion(job_id: str, *, succeeded: bool) -> None:
+    """Tell the originating LINE user that a background job has reached a terminal state."""
+    notification = _line_notifications.pop(job_id, None)
+    if not notification:
+        return
+    user_id, access_token, base_url = notification
+    if not succeeded:
+        text = "LINE 音檔轉錄失敗，請稍後重新傳送一次。"
+    elif base_url:
+        base = base_url.rstrip("/")
+        text = (
+            "LINE 音檔已完成轉錄。\n"
+            f"工作台：{base}/meetings/{job_id}\n"
+            f"TXT：{base}/meetings/{job_id}/download/txt\n"
+            f"Word：{base}/meetings/{job_id}/download/docx"
+        )
+    else:
+        text = "LINE 音檔已完成轉錄。請到本機會議工作台查看、編輯與下載 TXT／Word。"
+    try:
+        push_text_to_line(user_id, access_token, text)
+    except LineBotError:
+        import logging
+        logging.getLogger("transcript_bot.web").warning("LINE 完成通知傳送失敗 job=%s", job_id)
 
 
 def _enqueue_or_start(data_dir: str, job_id: str, paths, original_filename: str, cancel_event: threading.Event) -> None:
@@ -583,6 +619,7 @@ def _on_job_complete(data_dir: str, _finished_id: str) -> None:
 def _process_job(data_dir: str, paths, original_filename: str, cancel_event: threading.Event) -> None:
     """Background thread with progress tracking: normalize → transcribe → polish → save."""
     job_id = paths.job_id
+    succeeded = False
     _job_progress[job_id] = {"step": "loading", "pct": 0, "label": "loading (初始化)"}
 
     try:
@@ -716,12 +753,14 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         update_meeting_summary_text(data_dir, job_id, _serialize_summary(summary))
 
         _job_progress[job_id] = {"step": "done", "pct": 100, "label": "done (完成)"}
+        succeeded = True
 
     except Exception:
         import logging
         logging.getLogger("transcript_bot.web").exception("轉錄失敗 job=%s", job_id)
         _job_progress[job_id] = {"step": "error", "pct": 0, "label": "error (轉錄失敗，請重試)"}
     finally:
+        _notify_line_completion(job_id, succeeded=succeeded)
         _active_jobs.pop(job_id, None)
         _cancel_flags.pop(job_id, None)
         _job_progress.pop(job_id, None)
@@ -792,11 +831,8 @@ def _repair_overlong_segments(data_dir: Path, meeting) -> bool:
 
 def _delete_local_meeting_files(data_dir: Path, meeting_id: str) -> None:
     """Remove just the verified per-meeting job directory, never the whole data directory."""
-    audio_path = get_local_meeting_audio_path(data_dir, meeting_id)
-    if not audio_path:
-        return
     jobs_dir = (data_dir / "jobs").resolve()
-    job_dir = audio_path.parent.resolve()
+    job_dir = (jobs_dir / meeting_id).resolve()
     if job_dir.parent == jobs_dir and job_dir.exists():
         shutil.rmtree(job_dir)
 

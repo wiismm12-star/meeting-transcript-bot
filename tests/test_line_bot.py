@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from transcript_bot.database import list_local_meeting_exports
 from transcript_bot.line_bot import acknowledgement_for_event, verify_webhook_signature
+from transcript_bot.line_proxy import create_line_proxy_app
 from transcript_bot.web import create_web_app
 import transcript_bot.web as web
 
@@ -98,3 +99,36 @@ class LineBotTests(unittest.TestCase):
             web._active_jobs.pop(queued_paths.job_id, None)
             web._cancel_flags.pop(queued_paths.job_id, None)
             web._job_progress.pop(queued_paths.job_id, None)
+            web._line_notifications.pop(queued_paths.job_id, None)
+
+    def test_completed_line_job_pushes_txt_and_word_links_when_configured(self) -> None:
+        job_id = "line-complete-job"
+        web._line_notifications[job_id] = (
+            "U-line-user",
+            "access-token",
+            "http://192.168.1.10:8765/",
+        )
+        with patch("transcript_bot.web.push_text_to_line") as push:
+            web._notify_line_completion(job_id, succeeded=True)
+
+        self.assertEqual(push.call_args.args[:2], ("U-line-user", "access-token"))
+        text = push.call_args.args[2]
+        self.assertIn(f"/meetings/{job_id}", text)
+        self.assertIn(f"/meetings/{job_id}/download/txt", text)
+        self.assertIn(f"/meetings/{job_id}/download/docx", text)
+
+    def test_public_proxy_forwards_only_signed_webhook_payload(self) -> None:
+        app = create_line_proxy_app("http://workspace.test/line/webhook")
+        client = app.test_client()
+        with patch("transcript_bot.line_proxy.httpx.post") as post:
+            post.return_value = SimpleNamespace(content=b"OK", status_code=200, headers={"Content-Type": "text/plain"})
+            response = client.post(
+                "/line/webhook",
+                data=b'{"events":[]}',
+                headers={"Content-Type": "application/json", "X-Line-Signature": "signature"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(post.call_args.args[0], "http://workspace.test/line/webhook")
+        self.assertEqual(post.call_args.kwargs["headers"]["X-Line-Signature"], "signature")
+        self.assertEqual(client.get("/").status_code, 404)

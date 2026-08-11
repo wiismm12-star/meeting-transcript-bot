@@ -194,15 +194,23 @@ LINE Bot 會先驗證安全 webhook；收到 LINE 音訊、影片或支援格式
 ENABLE_LINE_BOT=true
 LINE_CHANNEL_SECRET=你的_channel_secret
 LINE_CHANNEL_ACCESS_TOKEN=你的_channel_access_token
+# 讓收到完成通知的手機可直接開啟 TXT／DOCX；可先填同一內網的 Web 位址
+LINE_DOWNLOAD_BASE_URL=http://192.168.1.10:8765
 ```
 
-LINE 需要公開 HTTPS webhook，不能直接連到 `127.0.0.1`。可先透過 Cloudflare Tunnel 或 ngrok 將本機的 `/line/webhook` 暫時公開，再在 LINE Developers Console 設定：
+LINE 需要公開 HTTPS webhook，不能直接連到 `127.0.0.1`。本專案提供只轉送 `/line/webhook` 的本機 Proxy（預設 `127.0.0.1:8766`），避免臨時 Tunnel 直接公開沒有登入保護的 Web 工作台。先在另一個 PowerShell 啟動：
+
+```powershell
+.\.venv\Scripts\python.exe -m transcript_bot.line_proxy
+```
+
+再以 Cloudflare Tunnel 或 ngrok 將 **8766** 暫時公開，並將它顯示的 HTTPS URL 加上 `/line/webhook` 後，填入 LINE Developers Console：
 
 ```text
-https://你的公開網域/line/webhook
+https://臨時-tunnel-網址/line/webhook
 ```
 
-按 LINE Console 的「Verify」後應成功。LINE 的 webhook 會先驗證 `X-Line-Signature`，未通過驗證的請求不會被處理。LINE 平台的公開 HTTPS webhook 實測仍須在設定公開網址後完成。
+按 LINE Console 的「Verify」後應成功。LINE 的 webhook 會先驗證 `X-Line-Signature`，未通過驗證的請求不會被處理。轉錄完成後，Bot 會主動通知原傳送者；設定 `LINE_DOWNLOAD_BASE_URL` 時，通知會附上工作台、TXT 與 Word 的下載連結。
 
 ## 啟動與使用
 
