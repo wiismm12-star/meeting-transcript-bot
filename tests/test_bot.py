@@ -139,6 +139,10 @@ class TelegramWebLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 audio = SimpleNamespace(file_id="file-id", file_size=10, file_name="董事會.mp3")
 
                 async def reply_text(self, text, **_kwargs):
+                    # A slow 5% request used to let a concurrent 20% request
+                    # arrive first. The sender queue must preserve this order.
+                    if "處理進度：5%" in text:
+                        await asyncio.sleep(0.01)
                     replies.append(text)
                     return FakeProgressMessage()
 
@@ -174,6 +178,15 @@ class TelegramWebLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any("目前階段：整理會議摘要" in reply for reply in replies))
             self.assertTrue(any("處理進度：100%" in reply for reply in replies))
             self.assertTrue(any("會議摘要：董事會" in reply for reply in replies))
+            progress_updates = [
+                reply.splitlines()[0]
+                for reply in replies
+                if reply.startswith("處理進度：")
+            ]
+            self.assertEqual(
+                progress_updates,
+                ["處理進度：0%", "處理進度：5%", "處理進度：20%", "處理進度：82%", "處理進度：90%", "處理進度：100%"],
+            )
 
     async def test_telegram_job_is_visible_then_web_cancel_stops_and_cleans_it(self) -> None:
         """Exercise the real Bot → shared status → Web cancel handoff end to end."""

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import shutil
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -336,6 +337,8 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not message or not user:
         return
 
+    progress_queue: asyncio.Queue[tuple[str, int] | None] | None = None
+    progress_sender: asyncio.Task[None] | None = None
     try:
         media, suffix, file_size = _extract_audio_meta(update)
         if file_size and file_size > settings.max_audio_bytes:
@@ -352,6 +355,7 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             ),
         )
         loop = asyncio.get_running_loop()
+        progress_queue = asyncio.Queue()
         last_pushed_pct = -10
         last_pushed_step = ""
 
@@ -366,14 +370,23 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             }
             return f"處理進度：{pct}%\n目前階段：{labels.get(step, '處理中')}"
 
-        async def _send_progress(step: str, pct: int) -> None:
-            try:
-                # Telegram does not normally notify users when a message is
-                # edited. Send a fresh, throttled status message so progress
-                # reaches the user as an actual push notification.
-                await message.reply_text(_progress_text(step, pct))
-            except (BadRequest, TimedOut):
-                logger.debug("Unable to send Telegram progress message", exc_info=True)
+        async def _send_progress_in_order() -> None:
+            """Send one notification at a time, in the order stages occur."""
+            while True:
+                item = await progress_queue.get()
+                try:
+                    if item is None:
+                        return
+                    step, pct = item
+                    # Telegram does not normally notify users when a message is
+                    # edited. Fresh, throttled messages are actual notifications.
+                    await message.reply_text(_progress_text(step, pct))
+                except (BadRequest, TimedOut):
+                    logger.debug("Unable to send Telegram progress message", exc_info=True)
+                finally:
+                    progress_queue.task_done()
+
+        progress_sender = asyncio.create_task(_send_progress_in_order())
 
         def _schedule_progress(step: str, pct: int) -> None:
             nonlocal last_pushed_pct, last_pushed_step
@@ -383,7 +396,7 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 return
             last_pushed_step = step
             last_pushed_pct = pct
-            asyncio.create_task(_send_progress(step, pct))
+            progress_queue.put_nowait((step, pct))
 
         def _set_progress(step: str, pct: int, label: str) -> None:
             write_job_status(settings.data_dir, paths.job_id, source="telegram", step=step, pct=pct, label=label)
@@ -452,7 +465,11 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         _set_progress("summarizing", 90, "summarizing (會議摘要)")
         summary = await asyncio.to_thread(_generate_meeting_summary, polished_text, meeting_title)
         update_meeting_summary_text(settings.data_dir, paths.job_id, _serialize_summary(summary))
-        await _send_progress("completed", 100)
+        _schedule_progress("completed", 100)
+        await progress_queue.join()
+        progress_queue.put_nowait(None)
+        await progress_sender
+        progress_sender = None
         clear_job_status(settings.data_dir, paths.job_id)
         displayed_text = (
             render_raw_transcript(normalized_segments)
@@ -513,6 +530,13 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if 'paths' in locals():
             clear_job_status(settings.data_dir, paths.job_id)
         await message.reply_text("處理失敗，請稍後再試，或改傳較短的音檔。")
+    finally:
+        # An error/cancellation should not leave a queued progress worker
+        # sending stale updates after the final result has been reported.
+        if progress_sender and not progress_sender.done():
+            progress_sender.cancel()
+            with suppress(asyncio.CancelledError):
+                await progress_sender
 
 
 async def handle_export_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
