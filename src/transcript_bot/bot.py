@@ -357,7 +357,6 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         loop = asyncio.get_running_loop()
         progress_queue = asyncio.Queue()
-        last_pushed_pct = -10
         last_pushed_step = ""
 
         def _progress_text(step: str, pct: int) -> str:
@@ -390,13 +389,13 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         progress_sender = asyncio.create_task(_send_progress_in_order())
 
         def _schedule_progress(step: str, pct: int) -> None:
-            nonlocal last_pushed_pct, last_pushed_step
-            # A stage change is always useful; during transcription, limit
-            # updates to 10% increments to stay well below Telegram rate limits.
-            if step == last_pushed_step and pct < last_pushed_pct + 10:
+            nonlocal last_pushed_step
+            # Telegram is most useful as a stage notifier.  Keep persisting
+            # detailed transcription progress for the Web status view, but do
+            # not turn every Whisper percentage increment into a chat message.
+            if step == last_pushed_step:
                 return
             last_pushed_step = step
-            last_pushed_pct = pct
             progress_queue.put_nowait((step, pct))
 
         def _set_progress(step: str, pct: int, label: str) -> None:

@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% block title %}本機逐字稿校稿{% endblock %}
 {% block content %}
+  {% macro source_badge(source_platform) -%}
+    {% set source = {'telegram': ('Telegram', 'telegram'), 'line_bot': ('LINE', 'line'), 'local_web': ('Web', 'web')}.get(source_platform, ('其他', 'other')) %}
+    <span class="source-badge {{ source[1] }}" title="上傳來源">來源：{{ source[0] }}</span>
+  {%- endmacro %}
+  <style>
+    .source-filter{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}.source-filter button{padding:5px 10px;border:1px solid #d5e4e6;border-radius:99px;color:#5b6d75;background:#fff;font-size:12px;font-weight:700}.source-filter button:hover,.source-filter button[aria-pressed="true"]{border-color:#82c9cc;color:#087f8a;background:#e8f8f8}.source-filter-hidden{display:none}
+  </style>
   <section class="home-hero">
     <div><p class="eyebrow">{{ 'PRIVATE MEETING WORKBENCH' if google_login else 'LOCAL MEETING WORKBENCH' }}</p><h1>本機逐字稿校稿</h1><p class="hero-copy">{{ '僅顯示目前 Google 帳號已認領的會議。' if google_login else '上傳錄音、校對逐字稿，將每一場會議整理成可閱讀的紀錄。' }}</p><p class="local-badge"><span>●</span>{{ ' Google 登入保護' if google_login else ' 僅限本機使用 · 127.0.0.1' }}</p><p id="telegram-status" class="telegram-badge {{ telegram_status.state }}"><span>●</span> Telegram Bot · <strong>{{ telegram_status.label }}</strong><small>{{ telegram_status.message }}</small></p></div>
     <div class="hero-mark" aria-hidden="true"><span>〰</span><i></i><i></i><i></i></div>
@@ -32,19 +39,19 @@
         {% set display_name = meeting.title or (meeting.audio_file_path | basename if meeting.audio_file_path else meeting.created_at[:16]) %}
         {% set show_progress = is_active or is_queued %}
         <section class="card meeting-list-card processing-card compact" role="region" aria-label="{{ '轉錄中' if is_active else ('排隊中' if is_queued else ('轉錄失敗' if is_failed else '轉錄未完成')) }} {{ display_name }}">
-          <div class="meeting-list-content"><div class="meeting-title-row"><strong>{{ display_name }}</strong><span class="meeting-id"># {{ meeting.id[:12] }}</span><span class="meeting-date">{{ meeting.created_at[:10] }}</span><span class="meeting-time">{{ meeting.created_at[11:16] }}</span>{% if is_active %}<span class="status-badge processing">● 轉錄中…</span>{% elif is_queued %}<span class="status-badge queued">⏳ 排隊中…</span>{% elif is_failed %}<span class="status-badge failed">轉錄失敗</span>{% else %}<span class="status-badge failed">轉錄未完成</span>{% endif %}</div>{% if show_progress %}<div class="progress-wrap"><div class="progress-stage" id="prog-stage-{{ meeting.id[:12] }}">{{ prog.label if prog.label else '初始化' }}</div><div class="progress-row"><div class="progress-bar" id="prog-{{ meeting.id[:12] }}"><div class="progress-fill" style="width:{{ prog.pct if prog.pct else 0 }}%"></div></div><span class="progress-text" id="prog-text-{{ meeting.id[:12] }}">{{ prog.pct if prog.pct else 0 }}%</span></div></div>{% elif is_failed %}<p class="error">{{ prog.label }}</p>{% endif %}<div class="meeting-actions"><form method="post" action="{{ url_for('delete_local_meeting', meeting_id=meeting.id) }}" style="display:inline" onsubmit="return confirm('確定要終止此會議的轉錄並刪除已上傳的音檔嗎？')"><input type="hidden" name="cancelled" value="1"><button type="submit" class="cancel-transcribe">✕ 終止轉錄</button></form></div></div>
+          <div class="meeting-list-content"><div class="meeting-title-row"><strong>{{ display_name }}</strong><span class="meeting-id"># {{ meeting.id[:12] }} {{ source_badge(meeting.source_platform) }}</span><span class="meeting-date">{{ meeting.created_at[:10] }}</span><span class="meeting-time">{{ meeting.created_at[11:16] }}</span>{% if is_active %}<span class="status-badge processing">● 轉錄中…</span>{% elif is_queued %}<span class="status-badge queued">⏳ 排隊中…</span>{% elif is_failed %}<span class="status-badge failed">轉錄失敗</span>{% else %}<span class="status-badge failed">轉錄未完成</span>{% endif %}</div>{% if show_progress %}<div class="progress-wrap"><div class="progress-stage" id="prog-stage-{{ meeting.id[:12] }}">{{ prog.label if prog.label else '初始化' }}</div><div class="progress-row"><div class="progress-bar" id="prog-{{ meeting.id[:12] }}"><div class="progress-fill" style="width:{{ prog.pct if prog.pct else 0 }}%"></div></div><span class="progress-text" id="prog-text-{{ meeting.id[:12] }}">{{ prog.pct if prog.pct else 0 }}%</span></div></div>{% elif is_failed %}<p class="error">{{ prog.label }}</p>{% endif %}<div class="meeting-actions"><form method="post" action="{{ url_for('delete_local_meeting', meeting_id=meeting.id) }}" style="display:inline" onsubmit="return confirm('確定要終止此會議的轉錄並刪除已上傳的音檔嗎？')"><input type="hidden" name="cancelled" value="1"><button type="submit" class="cancel-transcribe">✕ 終止轉錄</button></form></div></div>
         </section>
       {% endfor %}
     {% endif %}
 
     {# ── 最近會議 ── #}
     {% if done_meetings %}
-    <div class="meeting-list-heading"><div><p class="eyebrow">YOUR RECORDINGS</p><h2>最近會議 <span>{{ done_meetings|length }}</span></h2></div><div class="meeting-list-actions"><label class="select-all"><input id="select-all-meetings" type="checkbox"> 全選</label><span id="selected-count" class="meta">尚未選取</span><button id="delete-selected" class="danger-button" type="button">刪除已選會議</button></div></div>
+    <div class="meeting-list-heading"><div><p class="eyebrow">YOUR RECORDINGS</p><h2>最近會議 <span>{{ done_meetings|length }}</span></h2><div class="source-filter" aria-label="依上傳來源篩選"><button type="button" data-source-filter="all" aria-pressed="true">全部</button><button type="button" data-source-filter="local_web">Web</button><button type="button" data-source-filter="line_bot">LINE</button><button type="button" data-source-filter="telegram">Telegram</button></div></div><div class="meeting-list-actions"><label class="select-all"><input id="select-all-meetings" type="checkbox"> 全選</label><span id="selected-count" class="meta">尚未選取</span><button id="delete-selected" class="danger-button" type="button">刪除已選會議</button></div></div>
       <form id="bulk-delete-form" method="post" action="{{ url_for('delete_selected_local_meetings') }}">
         {% for meeting in done_meetings %}
-          <section class="card meeting-list-card">
+          <section class="card meeting-list-card recent-meeting-card" data-source="{{ meeting.source_platform }}">
             <label class="meeting-check"><input class="meeting-select" type="checkbox" name="meeting_ids" value="{{ meeting.id }}" aria-label="選取 {{ meeting.title or meeting.created_at[:16] }}"><span></span></label>
-            <div class="meeting-list-content"><div class="meeting-title-row"><strong>{{ meeting.title or meeting.created_at[:16] }}</strong><time>{{ meeting.created_at[:16] }}</time></div><div class="meeting-id"># {{ meeting.id[:12] }}</div><p>{{ meeting.transcript_text[:150] }}{% if meeting.transcript_text|length > 150 %}…{% endif %}</p><div class="meeting-actions"><a class="open-meeting" href="{{ url_for('edit_meeting', meeting_id=meeting.id) }}">開啟工作台 <span>→</span></a></div></div>
+            <div class="meeting-list-content"><div class="meeting-title-row"><strong>{{ meeting.title or meeting.created_at[:16] }}</strong><time>{{ meeting.created_at[:16] }}</time></div><div class="meeting-id"># {{ meeting.id[:12] }} {{ source_badge(meeting.source_platform) }}</div><p>{{ meeting.transcript_text[:150] }}{% if meeting.transcript_text|length > 150 %}…{% endif %}</p><div class="meeting-actions"><a class="open-meeting" href="{{ url_for('edit_meeting', meeting_id=meeting.id) }}">開啟工作台 <span>→</span></a></div></div>
           </section>
         {% endfor %}
       </form>
@@ -60,11 +67,13 @@
     const refreshTelegramStatus=()=>fetch('/api/telegram/status').then(response=>response.json()).then(status=>{telegramStatus.className='telegram-badge '+status.state;telegramStatus.innerHTML='<span>●</span> Telegram Bot · <strong>'+status.label+'</strong><small>'+status.message+'</small>';}).catch(()=>{});
     setInterval(refreshTelegramStatus,5000);
     {# ── Bulk select/deselect for completed meetings only ── #}
-    const selections=[...document.querySelectorAll('.meeting-select')],selectAll=document.getElementById('select-all-meetings'),count=document.getElementById('selected-count');
+    const selections=[...document.querySelectorAll('.meeting-select')],selectAll=document.getElementById('select-all-meetings'),count=document.getElementById('selected-count'),sourceFilters=[...document.querySelectorAll('[data-source-filter]')];
     if(selectAll){
-      const syncSelection=()=>{const picked=selections.filter(item=>item.checked).length;count.textContent=picked?`已選取 ${picked} 場會議`:'尚未選取';selectAll.checked=selections.length>0&&picked===selections.length;selectAll.indeterminate=picked>0&&picked<selections.length;};
-      selectAll.addEventListener('change',()=>{selections.forEach(item=>item.checked=selectAll.checked);syncSelection();});selections.forEach(item=>item.addEventListener('change',syncSelection));
-      document.getElementById('delete-selected').addEventListener('click',()=>{const picked=selections.filter(item=>item.checked).length;if(!picked){alert('請先選取要刪除的會議。');return;}if(!confirm(`確定要刪除 ${picked} 場會議及其本機音檔嗎？此操作無法復原。`))return;document.getElementById('bulk-delete-form').submit();});
+      const visibleSelections=()=>selections.filter(item=>!item.closest('.recent-meeting-card').classList.contains('source-filter-hidden'));
+      const syncSelection=()=>{const visible=visibleSelections(),picked=visible.filter(item=>item.checked).length;count.textContent=picked?`已選取 ${picked} 場會議`:'尚未選取';selectAll.checked=visible.length>0&&picked===visible.length;selectAll.indeterminate=picked>0&&picked<visible.length;};
+      selectAll.addEventListener('change',()=>{visibleSelections().forEach(item=>item.checked=selectAll.checked);syncSelection();});selections.forEach(item=>item.addEventListener('change',syncSelection));
+      sourceFilters.forEach(button=>button.addEventListener('click',()=>{const source=button.dataset.sourceFilter;document.querySelectorAll('.recent-meeting-card').forEach(card=>{const hidden=source!=='all'&&card.dataset.source!==source;card.classList.toggle('source-filter-hidden',hidden);if(hidden)card.querySelector('.meeting-select').checked=false;});sourceFilters.forEach(item=>item.setAttribute('aria-pressed',String(item===button)));syncSelection();}));
+      document.getElementById('delete-selected').addEventListener('click',()=>{const picked=visibleSelections().filter(item=>item.checked).length;if(!picked){alert('請先選取要刪除的會議。');return;}if(!confirm(`確定要刪除 ${picked} 場會議及其本機音檔嗎？此操作無法復原。`))return;document.getElementById('bulk-delete-form').submit();});
       syncSelection();
     }
     {# ── Progress polling + auto-refresh ── #}

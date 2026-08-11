@@ -788,26 +788,27 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
     succeeded = False
     meeting = get_local_meeting_export(Path(data_dir), job_id)
     is_line_job = bool(meeting and meeting.user_id and meeting.user_id != 0 and get_job_status(Path(data_dir), job_id) and get_job_status(Path(data_dir), job_id).get("source") == "line")
-    if is_line_job:
-        write_job_status(Path(data_dir), job_id, source="line", step="loading", pct=0, label="loading (初始化)")
-    _job_progress[job_id] = {"step": "loading", "pct": 0, "label": "loading (初始化)"}
+
+    def _set_progress(step: str, pct: int, label: str) -> None:
+        """Keep LINE's cross-process status in step with its in-memory card."""
+        _job_progress[job_id] = {"step": step, "pct": pct, "label": label}
+        if is_line_job:
+            write_job_status(Path(data_dir), job_id, source="line", step=step, pct=pct, label=label)
+
+    _set_progress("loading", 0, "loading (初始化)")
 
     try:
         # Step 1: Normalize audio (0 → 25%)
         if cancel_event.is_set():
             return
-        _job_progress[job_id] = {"step": "normalizing", "pct": 5, "label": "normalizing (音檔標準化)"}
+        _set_progress("normalizing", 5, "normalizing (音檔標準化)")
         normalize_audio(paths.input_audio, paths.normalized_audio)
-        _job_progress[job_id] = {"step": "normalizing", "pct": 20, "label": "normalizing (音檔標準化)"}
+        _set_progress("normalizing", 20, "normalizing (音檔標準化)")
 
         # Reject only after normalization so long, high-bitrate recordings still
         # get in and are auto-split. The normalized 64kbps ceiling is the real cap.
         if paths.normalized_audio.stat().st_size > settings.max_audio_bytes:
-            _job_progress[job_id] = {
-                "step": "error",
-                "pct": 25,
-                "label": f"error (音檔過大：超過 {settings.max_audio_mb} MB 標準化上限)",
-            }
+            _set_progress("error", 25, f"error (音檔過大：超過 {settings.max_audio_mb} MB 標準化上限)")
             return
 
         # Get audio duration for percentage calculation
@@ -823,11 +824,7 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
             expected_duration=duration,
         )
         if existing_meeting:
-            _job_progress[job_id] = {
-                "step": "reusing",
-                "pct": 82,
-                "label": "reusing (重用相同音檔的既有逐字稿)",
-            }
+            _set_progress("reusing", 82, "reusing (重用相同音檔的既有逐字稿)")
             segments = get_meeting_segments(Path(data_dir), existing_meeting.id, existing_meeting.user_id)
             if segments:
                 segments = split_segments_by_sentences(segments)
@@ -835,7 +832,7 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
                 update_meeting_transcript_text(data_dir, job_id, render_plain_transcript(segments))
                 update_meeting_summary_text(data_dir, job_id, existing_meeting.summary_text)
                 update_meeting_metadata(data_dir, job_id, Path(original_filename).stem[:160], "")
-                _job_progress[job_id] = {"step": "done", "pct": 100, "label": "done (完成)"}
+                _set_progress("done", 100, "done (完成)")
                 return
 
         # Step 2: Transcribe with diarization (25 → 90%)
@@ -845,7 +842,7 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         def _on_transcribe_progress(last_segment_time: float, _unused: float) -> None:
             nonlocal duration
             if last_segment_time < 0:  # signal: transcription complete
-                _job_progress[job_id] = {"step": "transcribing", "pct": 80, "label": "transcribing (語音辨識)"}
+                _set_progress("transcribing", 80, "transcribing (語音辨識)")
                 return
             # Chunk-based progress: direct pct in 20 → 80 range.
             if _unused == -999.0:
@@ -853,8 +850,7 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
                 existing_pct = _job_progress.get(job_id, {}).get("pct", 0)
                 if existing_pct >= pct:
                     return
-                _job_progress[job_id] = {**_job_progress.get(job_id, {}),
-                                          "step": "transcribing", "pct": pct}
+                _set_progress("transcribing", pct, _job_progress.get(job_id, {}).get("label", "transcribing (語音辨識)"))
                 return
             # Time-based progress (single-chunk path).
             if duration > 0:
@@ -862,19 +858,17 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
                 existing_pct = _job_progress.get(job_id, {}).get("pct", 0)
                 if existing_pct >= pct:
                     return
-                _job_progress[job_id] = {**_job_progress.get(job_id, {}),
-                                          "step": "transcribing", "pct": pct}
+                _set_progress("transcribing", pct, _job_progress.get(job_id, {}).get("label", "transcribing (語音辨識)"))
 
-        _job_progress[job_id] = {"step": "transcribing", "pct": 20, "label": "transcribing (語音辨識)"}
+        _set_progress("transcribing", 20, "transcribing (語音辨識)")
 
         def _chunk_label(completed: int, total: int) -> None:
-            prog = _job_progress.get(job_id) or {}
-            prog["label"] = f"transcribing (分段語音辨識 {completed}/{total})"
-            _job_progress[job_id] = prog
+            pct = _job_progress.get(job_id, {}).get("pct", 20)
+            _set_progress("transcribing", pct, f"transcribing (分段語音辨識 {completed}/{total})")
 
         def _stage_label(label: str) -> None:
-            _job_progress[job_id] = {**_job_progress.get(job_id, {}),
-                                      "step": "transcribing", "label": label}
+            pct = _job_progress.get(job_id, {}).get("pct", 20)
+            _set_progress("transcribing", pct, label)
 
         segments = normalize_speaker_labels(
             transcribe_audio_smart(
@@ -888,7 +882,7 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         # Step 3: Polish & save (80 → 88%)
         if cancel_event.is_set():
             return
-        _job_progress[job_id] = {"step": "polishing", "pct": 82, "label": "polishing (潤稿整理)"}
+        _set_progress("polishing", 82, "polishing (潤稿整理)")
         # Split long segments into sentence-level chunks before saving
         segments = split_segments_by_sentences(segments)
         save_transcript_segments(data_dir, job_id, segments)
@@ -903,7 +897,7 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
             _logging.getLogger("transcript_bot.web").warning(
                 "Ollama 潤稿失敗，降級為本地規則清理並保留原始逐字稿 job=%s", job_id)
             transcript_text = polish_local_transcript(raw_text)
-        _job_progress[job_id] = {"step": "saving", "pct": 86, "label": "saving (儲存中)"}
+        _set_progress("saving", 86, "saving (儲存中)")
         # Keep the timeline aligned with the polished text.  A polish response
         # must never turn one row into an unbounded paragraph in the editor.
         segments = split_segments_by_sentences(
@@ -918,24 +912,25 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         # Step 4: Summary (88 → 94%)
         if cancel_event.is_set():
             return
-        _job_progress[job_id] = {"step": "summarizing", "pct": 90, "label": "summarizing (會議摘要)"}
+        _set_progress("summarizing", 90, "summarizing (會議摘要)")
         summary = _generate_meeting_summary(transcript_text, Path(original_filename).stem[:160])
         update_meeting_summary_text(data_dir, job_id, _serialize_summary(summary))
 
-        _job_progress[job_id] = {"step": "done", "pct": 100, "label": "done (完成)"}
+        _set_progress("done", 100, "done (完成)")
         succeeded = True
 
     except Exception as exc:
         import logging
         logging.getLogger("transcript_bot.web").exception("轉錄失敗 job=%s", job_id)
         label = f"error ({_safe_transcription_error(exc)})"
-        _job_progress[job_id] = {"step": "error", "pct": 0, "label": label}
+        _set_progress("error", 0, label)
         # Web jobs used to retain failure state only in process memory.  Once
         # the worker exited, the UI could not tell a genuine failure from an
         # unfinished task. Persist a non-sensitive explanation for the card.
-        write_job_status(
-            Path(data_dir), job_id, source="web", step="error", pct=0, label=label
-        )
+        if not is_line_job:
+            write_job_status(
+                Path(data_dir), job_id, source="web", step="error", pct=0, label=label
+            )
     finally:
         if is_line_job:
             write_job_status(

@@ -27,6 +27,7 @@ class MeetingRecord:
 class MeetingExportRecord:
     id: str
     user_id: int
+    source_platform: str
     created_at: str
     title: str
     notes: str
@@ -268,6 +269,7 @@ def get_meeting_export(data_dir: Path, meeting_id: str, user_id: int) -> Meeting
             SELECT
                 id,
                 user_id,
+                source_platform,
                 created_at,
                 title,
                 notes,
@@ -291,7 +293,7 @@ def get_local_meeting_export(data_dir: Path, meeting_id: str) -> MeetingExportRe
     with _connect(data_dir) as conn:
         row = conn.execute(
             """
-            SELECT id, user_id, created_at, title, notes, transcript_text, summary_text, action_text, transcript_txt_path, transcript_docx_path, audio_file_path
+            SELECT id, user_id, source_platform, created_at, title, notes, transcript_text, summary_text, action_text, transcript_txt_path, transcript_docx_path, audio_file_path
             FROM meetings
             WHERE id = ?
             """,
@@ -305,7 +307,7 @@ def list_meeting_exports(data_dir: Path, user_id: int, limit: int = 100) -> list
     with _connect(data_dir) as conn:
         rows = conn.execute(
             """
-            SELECT id, user_id, created_at, title, notes, transcript_text, summary_text,
+            SELECT id, user_id, source_platform, created_at, title, notes, transcript_text, summary_text,
                    action_text, transcript_txt_path, transcript_docx_path, audio_file_path
             FROM meetings WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
             """,
@@ -378,7 +380,7 @@ def list_local_meeting_exports(data_dir: Path, limit: int = 100) -> list[Meeting
     with _connect(data_dir) as conn:
         rows = conn.execute(
             """
-            SELECT id, user_id, created_at, title, notes, transcript_text, summary_text, action_text, transcript_txt_path, transcript_docx_path, audio_file_path
+            SELECT id, user_id, source_platform, created_at, title, notes, transcript_text, summary_text, action_text, transcript_txt_path, transcript_docx_path, audio_file_path
             FROM meetings
             ORDER BY created_at DESC
             LIMIT ?
@@ -424,7 +426,7 @@ def find_matching_local_meeting(
     with _connect(data_dir) as conn:
         rows = conn.execute(
             """
-            SELECT id, user_id, created_at, title, notes, transcript_text,
+            SELECT id, user_id, source_platform, created_at, title, notes, transcript_text,
                    summary_text, action_text, transcript_txt_path,
                    transcript_docx_path, audio_file_path
             FROM meetings
@@ -641,6 +643,7 @@ def _meeting_export_from_row(row: sqlite3.Row | None) -> MeetingExportRecord | N
     return MeetingExportRecord(
         id=str(row["id"]),
         user_id=int(row["user_id"]),
+        source_platform=str(row["source_platform"]),
         created_at=str(row["created_at"]),
         title=str(row["title"]),
         notes=str(row["notes"]),

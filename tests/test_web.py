@@ -55,10 +55,26 @@ class LocalWebCorrectionTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_index_lists_local_meetings(self) -> None:
+        line_id = "line-meeting"
+        web_id = "web-processing"
+        create_meeting(
+            self.data_dir,
+            MeetingRecord(id=line_id, user_id=1002, source_platform="line_bot", audio_file_path=str(self.audio_path), normalized_audio_path="", transcript_txt_path="", transcript_docx_path=""),
+        )
+        update_meeting_transcript_text(self.data_dir, line_id, "LINE 完成的逐字稿")
+        create_meeting(
+            self.data_dir,
+            MeetingRecord(id=web_id, user_id=0, source_platform="local_web", audio_file_path=str(self.audio_path), normalized_audio_path="", transcript_txt_path="", transcript_docx_path=""),
+        )
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn(self.meeting_id.encode(), response.data)
         self.assertIn("新增一場會議".encode(), response.data)
+        self.assertIn("來源：Telegram".encode(), response.data)
+        self.assertIn("來源：LINE".encode(), response.data)
+        self.assertIn("來源：Web".encode(), response.data)
+        self.assertIn(b'data-source-filter="line_bot"', response.data)
+        self.assertIn(b'data-source="line_bot"', response.data)
 
     def test_telegram_processing_job_appears_and_web_cancel_requests_stop(self) -> None:
         pending_id = "telegram-processing"

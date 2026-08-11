@@ -71,6 +71,7 @@ class TelegramWebLifecycleTests(unittest.IsolatedAsyncioTestCase):
             data_dir = Path(temp_dir)
             init_database(data_dir)
             progress_updates: list[int] = []
+            replies: list[str] = []
 
             class FakeMessage:
                 chat_id = 123
@@ -78,7 +79,8 @@ class TelegramWebLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 document = None
                 audio = SimpleNamespace(file_id="file-id", file_size=10, file_name="meeting.mp3")
 
-                async def reply_text(self, _text, **_kwargs):
+                async def reply_text(self, text, **_kwargs):
+                    replies.append(text)
                     return None
 
             class FakeBot:
@@ -121,6 +123,10 @@ class TelegramWebLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 await bot.process_audio(update, context)
 
         self.assertEqual(progress_updates, [20, 35, 50, 80])
+        self.assertEqual(
+            [reply.splitlines()[0] for reply in replies if reply.startswith("處理進度：")],
+            ["處理進度：0%", "處理進度：5%", "處理進度：20%", "處理進度：82%", "處理進度：90%", "處理進度：100%"],
+        )
 
     async def test_telegram_completion_saves_and_replies_with_summary(self) -> None:
         with TemporaryDirectory() as temp_dir:
