@@ -243,7 +243,15 @@ ENABLE_EMAIL_DELIVERY=true
 .\.venv\Scripts\python.exe -m transcript_bot.web
 ```
 
-在這台電腦開啟 [http://127.0.0.1:8765](http://127.0.0.1:8765)。介面只綁定 loopback 位址，無法從同一網路的其他裝置連入。
+網站預設監聽本機所有網卡（`WEB_HOST=0.0.0.0`），同一公司內網的同事可透過 `http://這台電腦的內網-IP:8765` 開啟。若主機有固定內網 DNS，建議改用該名稱。
+
+> ⚠️ **內網存取提醒：** 此工作台目前沒有登入、使用者權限或會議資料隔離；能連入的人都可檢視、修改、下載與刪除全部會議。請只開放給受信任的公司網段，並在 Windows 防火牆建立只允許該網段 TCP 8765 的規則。若需要限制為單一網卡，可在 `.env` 設定 `WEB_HOST=192.168.x.x`；連接埠可用 `WEB_PORT` 變更。
+
+以「私人」網路設定檔為例，請用系統管理員 PowerShell 將 `192.168.1.0/24` 改成公司的實際網段後執行：
+
+```powershell
+New-NetFirewallRule -DisplayName "Meeting Transcript Web (Internal)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8765 -RemoteAddress 192.168.1.0/24 -Profile Private
+```
 
 > ⚠️ **改完 `src/transcript_bot/*.py` 後必須重啟伺服器。** 本機 Web 以 `debug=False` 執行，編輯原始碼**不會**熱重載。若直接把音檔丟到仍在跑的舊程序上，執行的會是舊程式碼（例如潤稿規則沒生效）。重啟步驟：
 >

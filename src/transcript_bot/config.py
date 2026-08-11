@@ -4,6 +4,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # The web workspace is intended for trusted internal-network use. Keep the
+    # bind address configurable so deployments can restrict it to one LAN interface.
+    web_host: str = "0.0.0.0"
+    web_port: int = 8765
     telegram_bot_token: str = ""
     telegram_api_id: int | None = None
     telegram_api_hash: str = ""
@@ -107,6 +111,8 @@ class Settings(BaseSettings):
             raise RuntimeError("GLADIA_NUM_SPEAKERS 必須是 0 或正整數。")
         if self.max_concurrent_jobs < 1:
             raise RuntimeError("MAX_CONCURRENT_JOBS 必須是 1 或以上的正整數。")
+        if not 1 <= self.web_port <= 65535:
+            raise RuntimeError("WEB_PORT 必須介於 1 和 65535 之間。")
         if self.telegram_request_timeout < 1:
             raise RuntimeError("TELEGRAM_REQUEST_TIMEOUT 必須是正整數。")
 

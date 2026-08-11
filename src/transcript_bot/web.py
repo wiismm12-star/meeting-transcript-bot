@@ -752,8 +752,8 @@ def _deserialize_summary(value: str) -> MeetingSummary | None:
     return MeetingSummary(title, overview, highlights)
 
 
-def _kill_stale_servers() -> None:
-    """Kill all other transcript_bot.web processes so THIS instance owns port 8765.
+def _kill_stale_servers(port: int) -> None:
+    """Kill other transcript_bot.web processes so this instance owns ``port``.
 
     Any process running ``transcript_bot.web`` other than ourselves is a stale
     server (whether launched from our ``.venv`` or another Python install such as
@@ -805,7 +805,7 @@ def _kill_stale_servers() -> None:
             ["netstat", "-ano"], capture_output=True, text=True, timeout=5, errors="ignore"
         )
         for line in result.stdout.splitlines():
-            if ":8765" in line and "LISTENING" in line:
+            if f":{port}" in line and "LISTENING" in line:
                 try:
                     pid = int(line.strip().split()[-1])
                 except ValueError:
@@ -825,7 +825,7 @@ def _kill_stale_servers() -> None:
             result = _sp.run(
                 ["netstat", "-ano"], capture_output=True, text=True, timeout=5, errors="ignore"
             )
-            if not any(":8765" in line and "LISTENING" in line
+            if not any(f":{port}" in line and "LISTENING" in line
                        and line.strip().split()[-1] != str(current_pid)
                        for line in result.stdout.splitlines()):
                 return
@@ -835,17 +835,17 @@ def _kill_stale_servers() -> None:
 
 
 def main() -> None:
-    _kill_stale_servers()
+    _kill_stale_servers(settings.web_port)
     # Register bundled NVIDIA CUDA DLLs so ctranslate2/pyannote can find them on GPU.
     from transcript_bot.cuda_dlls import register_nvidia_dlls
 
     register_nvidia_dlls()
     app = create_web_app()
     app.jinja_env.auto_reload = True  # reload templates on every request in dev
-    # Loopback binding is deliberate: this MVP must not be exposed to a network.
+    # Access control is enforced by the host firewall / reverse proxy, not Flask.
     # use_reloader=False prevents Werkzeug from spawning a child interpreter
     # (which on this machine resolves to uv's cached cpython and steals port 8765).
-    app.run(host="127.0.0.1", port=8765, debug=False, use_reloader=False)
+    app.run(host=settings.web_host, port=settings.web_port, debug=False, use_reloader=False)
 
 
 def _register_nvidia_dlls() -> None:  # pragma: no cover - thin alias
