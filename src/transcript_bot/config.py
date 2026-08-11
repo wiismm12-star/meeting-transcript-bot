@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     # requires Google login.
     web_lan_bypass_google_login: bool = False
     web_lan_trusted_cidrs: str = "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    # Keep bot-originated meetings on the shared internal workflow by default.
+    # Enable only when Telegram/LINE users should explicitly claim records in
+    # the public Google-protected workspace.
+    bot_use_public_claim_links: bool = False
     enable_pyannote_diarization: bool = False
     pyannote_hf_token: str = ""
     pyannote_num_speakers: int = 0

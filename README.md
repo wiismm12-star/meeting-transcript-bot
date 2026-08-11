@@ -220,7 +220,7 @@ ngrok Free 的瀏覽器頁面會先顯示一次 ngrok 提示頁；使用者按�
 
 每個 Google 帳號只會看到自己建立或認領的會議。Telegram／LINE 身分與 Google 帳號並非同一個帳號，因此 Bot 會在完成通知中提供 7 天有效、只能使用一次的認領連結；使用者以 Google 登入後按下確認，該會議才會歸到該帳號。這避免僅憑會議 ID 或猜測網址就讀取他人的資料。
 
-LINE webhook 仍應維持原本只轉送 `/line/webhook` 的 8766 Tunnel；不要改為把未保護的 8765 直接公開。公開模式下，LINE 完成通知會改送認領連結，不再送可直接下載的連結。
+LINE webhook 仍應維持原本只轉送 `/line/webhook` 的 8766 Tunnel；不要改為把未保護的 8765 直接公開。預設 Telegram／LINE 仍使用內網共用流程；只有設定 `BOT_USE_PUBLIC_CLAIM_LINKS=true` 時，完成通知才會改送公開工作台的 Google 認領連結。
 
 ### 同時提供公司內網免登入入口（選用）
 

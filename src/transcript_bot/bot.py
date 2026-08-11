@@ -481,7 +481,11 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
         claim_text = ""
-        if settings.enable_google_login and settings.public_web_base_url:
+        if (
+            settings.enable_google_login
+            and settings.public_web_base_url
+            and getattr(settings, "bot_use_public_claim_links", False)
+        ):
             token = create_meeting_claim(settings.data_dir, paths.job_id)
             claim_text = (
                 "\n\n要在公開工作台查看與下載，請先以 Google 帳號認領：\n"

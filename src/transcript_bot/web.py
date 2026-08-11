@@ -693,7 +693,11 @@ def _notify_line_completion(job_id: str, *, succeeded: bool, data_dir: Path | No
     user_id, access_token, base_url = notification
     if not succeeded:
         text = "LINE 音檔轉錄失敗，請稍後重新傳送一次。"
-    elif getattr(settings, "enable_google_login", False) and getattr(settings, "public_web_base_url", ""):
+    elif (
+        getattr(settings, "enable_google_login", False)
+        and getattr(settings, "public_web_base_url", "")
+        and getattr(settings, "bot_use_public_claim_links", False)
+    ):
         token = create_meeting_claim(data_dir or Path(settings.data_dir), job_id)
         text = "LINE 音檔已完成轉錄。請開啟此一次性連結，以 Google 帳號認領並查看／下載：\n" + str(settings.public_web_base_url).rstrip("/") + f"/meetings/{job_id}/claim/{token}"
     elif base_url:
