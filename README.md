@@ -132,6 +132,10 @@ ENABLE_PYANNOTE_DIARIZATION=true
 
 第一次轉錄會下載 Whisper 模型權重至 `data/models/whisper`。此專案刻意不使用 Windows 的 Hugging Face 快取符號連結，因此不需要開啟開發人員模式。Whisper 負責辨識文字；多人分段仍須使用 pyannote.audio。模型不能保證 100% 還原，尤其是重疊說話、遠距收音與未提供的專有名詞，但這是目前最適合本機離線比較的方案。
 
+### 轉錄方案基準比較（已完成）
+
+本專案已使用同一批台灣中文錄音完成 Deepgram、Gladia 與本機 Whisper large-v3 的辨識結果比較。這項驗證已完成，不列為後續 MVP 待辦；只有在更換模型、重要設定或錄音條件後，才需要重新比較。
+
 ## 本機免費潤稿（預設）
 
 安裝 [Ollama](https://ollama.com/) 後執行：
