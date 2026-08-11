@@ -334,7 +334,7 @@ def find_matching_local_meeting(
                    summary_text, action_text, transcript_txt_path,
                    transcript_docx_path, audio_file_path
             FROM meetings
-            WHERE source_platform = 'local_web'
+            WHERE source_platform IN ('local_web', 'line_bot')
               AND id != ?
               AND transcript_text != ''
             ORDER BY created_at ASC

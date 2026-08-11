@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import collections
+import hashlib
 import threading
 from pathlib import Path
 import shutil
@@ -45,7 +46,13 @@ from transcript_bot.exporters import write_docx, write_text
 from transcript_bot.storage import create_job_paths, ensure_data_dirs
 from transcript_bot.transcription import transcribe_audio_smart
 from transcript_bot.ollama_client import OllamaError, summarize_meeting_with_ollama
-from transcript_bot.line_bot import LineBotError, acknowledgement_for_event, reply_to_line, verify_webhook_signature
+from transcript_bot.line_bot import (
+    LineBotError,
+    acknowledgement_for_event,
+    download_line_message_content,
+    reply_to_line,
+    verify_webhook_signature,
+)
 from transcript_bot.job_status import get_job_status, is_job_active, list_active_job_statuses, request_cancel
 
 # Module-level job tracking for async transcription
@@ -172,7 +179,7 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
 
     @app.post("/line/webhook")
     def line_webhook():
-        """A small, signed LINE ingress used for safe connectivity testing first."""
+        """Accept signed LINE events and hand supported media to the local job queue."""
         if not settings.enable_line_bot:
             abort(404)
         raw_body = request.get_data(cache=False)
@@ -187,6 +194,13 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
         for event in payload.get("events", []):
             reply_token = str(event.get("replyToken") or "")
             acknowledgement = acknowledgement_for_event(event)
+            message = event.get("message") or {}
+            if message.get("type") in {"audio", "file", "video"} and message.get("id"):
+                _start_line_media_download(
+                    app.config["DATA_DIR"],
+                    event,
+                    settings.line_channel_access_token,
+                )
             if reply_token and acknowledgement:
                 try:
                     reply_to_line(reply_token, settings.line_channel_access_token, acknowledgement)
@@ -431,6 +445,86 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
         return jsonify({"jobs": sorted(set(_job_progress) | set(telegram_jobs))})
 
     return app
+
+
+def _line_user_id(event: dict) -> int:
+    """Return a stable, non-reversible SQLite-safe ID for a LINE user."""
+    user_id = str((event.get("source") or {}).get("userId") or "")
+    if not user_id:
+        return 0
+    digest = hashlib.sha256(user_id.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
+
+
+def _line_media_name(event: dict) -> str:
+    """Choose an ffmpeg-friendly name without trusting a remote filename path."""
+    message = event.get("message") or {}
+    message_type = message.get("type")
+    if message_type == "video":
+        return "LINE 影片.mp4"
+    if message_type == "file":
+        supplied = secure_filename(str(message.get("fileName") or ""))
+        suffix = Path(supplied).suffix.lower()
+        if suffix in {".m4a", ".mp3", ".wav", ".ogg", ".webm", ".mp4", ".aac"}:
+            return supplied
+    return "LINE 錄音.m4a"
+
+
+def _start_line_media_download(data_dir: Path, event: dict, access_token: str) -> str:
+    """Create a LINE meeting now, then download its private content off the webhook thread."""
+    message = event.get("message") or {}
+    message_id = str(message.get("id") or "")
+    filename = _line_media_name(event)
+    paths = create_job_paths(data_dir, Path(filename).suffix)
+    create_meeting(
+        data_dir,
+        MeetingRecord(
+            id=paths.job_id,
+            user_id=_line_user_id(event),
+            source_platform="line_bot",
+            audio_file_path=str(paths.input_audio),
+            normalized_audio_path=str(paths.normalized_audio),
+            transcript_txt_path=str(paths.transcript_txt),
+            transcript_docx_path=str(paths.transcript_docx),
+        ),
+    )
+    update_meeting_metadata(data_dir, paths.job_id, Path(filename).stem[:160], "")
+    cancel_event = threading.Event()
+    _cancel_flags[paths.job_id] = cancel_event
+    _job_progress[paths.job_id] = {"step": "downloading", "pct": 0, "label": "downloading (從 LINE 下載音檔)"}
+    thread = threading.Thread(
+        target=_download_line_media_and_enqueue,
+        args=(data_dir, paths, filename, message_id, access_token, cancel_event),
+        daemon=True,
+    )
+    _active_jobs[paths.job_id] = thread
+    thread.start()
+    return paths.job_id
+
+
+def _download_line_media_and_enqueue(
+    data_dir: Path,
+    paths,
+    filename: str,
+    message_id: str,
+    access_token: str,
+    cancel_event: threading.Event,
+) -> None:
+    """Download LINE media, then route it through the same bounded worker queue as Web uploads."""
+    try:
+        content = download_line_message_content(message_id, access_token)
+        if cancel_event.is_set():
+            return
+        paths.input_audio.write_bytes(content)
+        if cancel_event.is_set():
+            return
+        _enqueue_or_start(data_dir, paths.job_id, paths, filename, cancel_event)
+    except LineBotError:
+        _job_progress[paths.job_id] = {"step": "error", "pct": 0, "label": "error (無法從 LINE 下載音檔)"}
+        _active_jobs.pop(paths.job_id, None)
+    except OSError:
+        _job_progress[paths.job_id] = {"step": "error", "pct": 0, "label": "error (儲存 LINE 音檔失敗)"}
+        _active_jobs.pop(paths.job_id, None)
 
 
 def _enqueue_or_start(data_dir: str, job_id: str, paths, original_filename: str, cancel_event: threading.Event) -> None:

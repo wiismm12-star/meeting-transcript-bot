@@ -184,9 +184,11 @@ PYANNOTE_NUM_SPEAKERS=0
 
 `PYANNOTE_NUM_SPEAKERS=0` 代表自動估計人數；已知是四人會議時，可設為 `4`。
 
-## LINE Bot 連線測試（第一階段）
+## LINE Bot（webhook 與音檔轉錄）
 
-LINE Bot 入口目前先完成安全 webhook 與收訊回覆測試，尚未把 LINE 音檔送入背景轉錄。請在 LINE Developers 建立 Messaging API channel，取得 Channel secret 與 Channel access token，並在 `.env` 填入：
+LINE Bot 會先驗證安全 webhook；收到 LINE 音訊、影片或支援格式的音檔後，會立即回覆已開始背景轉錄，並將檔案交給與 Web 上傳共用的工作佇列。完成的逐字稿可在本機會議工作台查看、編輯與下載。
+
+請在 LINE Developers 建立 Messaging API channel，取得 Channel secret 與 Channel access token，並在 `.env` 填入：
 
 ```env
 ENABLE_LINE_BOT=true
@@ -200,7 +202,7 @@ LINE 需要公開 HTTPS webhook，不能直接連到 `127.0.0.1`。可先透過 
 https://你的公開網域/line/webhook
 ```
 
-按 LINE Console 的「Verify」後應成功。傳送文字或音檔給官方帳號時，Bot 會回覆連線測試結果。LINE 的 webhook 會先驗證 `X-Line-Signature`，未通過驗證的請求不會被處理。
+按 LINE Console 的「Verify」後應成功。LINE 的 webhook 會先驗證 `X-Line-Signature`，未通過驗證的請求不會被處理。LINE 平台的公開 HTTPS webhook 實測仍須在設定公開網址後完成。
 
 ## 啟動與使用
 

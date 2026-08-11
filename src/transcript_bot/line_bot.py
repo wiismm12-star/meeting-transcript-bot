@@ -51,7 +51,7 @@ def acknowledgement_for_event(event: dict[str, Any]) -> str | None:
     message = event.get("message") or {}
     message_type = message.get("type")
     if message_type in {"audio", "file", "video"}:
-        return "已收到音檔。LINE Bot 測試連線正常；音檔自動轉錄會在下一步啟用。"
+        return "已收到音檔，已開始在背景轉錄。完成後可在本機會議工作台查看與下載逐字稿。"
     if message_type == "text":
         return "LINE Bot 測試連線正常。請傳送錄音檔來進行下一階段測試。"
     return None
