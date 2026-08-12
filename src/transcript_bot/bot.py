@@ -62,7 +62,7 @@ from transcript_bot.formatting import (
     render_meeting_minutes,
 )
 from transcript_bot.ollama_client import summarize_meeting_with_ollama
-from transcript_bot.storage import create_job_paths
+from transcript_bot.storage import create_job_paths, purge_stale_transcription_jobs
 from transcript_bot.transcription import transcribe_audio_smart
 from transcript_bot.job_status import cancel_requested, clear_job_status, write_job_status
 
@@ -346,6 +346,7 @@ async def process_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await message.reply_text(f"音檔超過 {settings.max_audio_mb} MB，請先壓縮或切段後再上傳。")
             return
 
+        purge_stale_transcription_jobs(settings.data_dir)
         paths = create_job_paths(settings.data_dir, suffix)
         create_meeting(
             settings.data_dir,

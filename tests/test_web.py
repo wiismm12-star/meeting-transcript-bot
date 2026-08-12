@@ -21,6 +21,7 @@ from transcript_bot.database import save_transcript_segments
 from transcript_bot.web import _sync_polished_segments, create_web_app
 from transcript_bot.formatting import split_segments_by_sentences
 from transcript_bot.job_status import get_job_status, write_job_status
+from transcript_bot.storage import create_job_paths, purge_stale_transcription_jobs
 
 
 class LocalWebCorrectionTests(unittest.TestCase):
@@ -111,6 +112,31 @@ class LocalWebCorrectionTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("telegram-new", response.get_json()["jobs"])
+
+    def test_new_transcription_cleanup_removes_only_stale_unfinished_jobs(self) -> None:
+        stale_paths = create_job_paths(self.data_dir, ".ogg")
+        stale_paths.input_audio.write_bytes(b"stale")
+        create_meeting(
+            self.data_dir,
+            MeetingRecord(id=stale_paths.job_id, user_id=1001, source_platform="telegram", audio_file_path=str(stale_paths.input_audio), normalized_audio_path="", transcript_txt_path="", transcript_docx_path=""),
+        )
+        (self.data_dir / "job-status").mkdir(exist_ok=True)
+        (self.data_dir / "job-status" / f"{stale_paths.job_id}.json").write_text(
+            '{"source":"telegram","step":"transcribing","pct":20,"owner_pid":999999}', encoding="utf-8"
+        )
+        error_paths = create_job_paths(self.data_dir, ".ogg")
+        create_meeting(
+            self.data_dir,
+            MeetingRecord(id=error_paths.job_id, user_id=1001, source_platform="telegram", audio_file_path="", normalized_audio_path="", transcript_txt_path="", transcript_docx_path=""),
+        )
+        write_job_status(self.data_dir, error_paths.job_id, source="telegram", step="error", pct=0, label="error")
+
+        removed = purge_stale_transcription_jobs(self.data_dir)
+
+        self.assertEqual(removed, [stale_paths.job_id])
+        self.assertFalse(stale_paths.job_dir.exists())
+        self.assertIsNone(get_local_meeting_export(self.data_dir, stale_paths.job_id))
+        self.assertIsNotNone(get_local_meeting_export(self.data_dir, error_paths.job_id))
 
     def test_index_shows_a_persisted_safe_web_transcription_error(self) -> None:
         failed_id = "web-failed"

@@ -53,7 +53,7 @@ from transcript_bot.formatting import (
     split_segments_by_sentences,
 )
 from transcript_bot.exporters import write_docx, write_text
-from transcript_bot.storage import create_job_paths, ensure_data_dirs
+from transcript_bot.storage import create_job_paths, ensure_data_dirs, purge_stale_transcription_jobs
 from transcript_bot.transcription import transcribe_audio_smart
 from transcript_bot.ollama_client import OllamaError, summarize_meeting_with_ollama
 from transcript_bot.line_bot import (
@@ -286,6 +286,7 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
         if suffix not in {".m4a", ".mp3", ".wav", ".ogg", ".webm", ".mp4", ".aac"}:
             return redirect(url_for("index", error="請上傳 m4a、mp3、wav、ogg、webm、mp4 或 aac 音檔。"))
 
+        purge_stale_transcription_jobs(app.config["DATA_DIR"])
         paths = create_job_paths(app.config["DATA_DIR"], suffix)
         try:
             uploaded_file.save(paths.input_audio)
@@ -635,6 +636,7 @@ def _start_line_media_download(data_dir: Path, event: dict, access_token: str) -
     message = event.get("message") or {}
     message_id = str(message.get("id") or "")
     filename = _line_media_name(event)
+    purge_stale_transcription_jobs(data_dir)
     paths = create_job_paths(data_dir, Path(filename).suffix)
     create_meeting(
         data_dir,
