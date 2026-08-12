@@ -99,9 +99,11 @@ _SUMMARY_SYSTEM_PROMPT = """
 You are a careful Traditional-Chinese meeting summarizer. Use only facts explicitly
 present in the supplied transcript. Return JSON only, with this exact shape:
 {"title":"...","overview":"...","highlights":["...","..."]}
-Write a concise title (max 26 Chinese characters), a 1-2 sentence overview, and 3-5
-concise highlights. Do not copy speaker labels, do not invent decisions, names, dates,
-or outcomes, and do not mention uncertain fragments as facts. Use Traditional Chinese.
+Write a concise title (max 26 Chinese characters). Follow the reading budget supplied
+by the user: use a 1-2 sentence overview and enough concise highlights to cover the
+meeting without exceeding that budget. Do not copy speaker labels, do not invent
+decisions, names, dates, or outcomes, and do not mention uncertain fragments as facts.
+Use Traditional Chinese.
 """.strip()
 
 # Map step: summarize ONE chunk of a longer transcript. Keeps the model call small
@@ -127,6 +129,44 @@ _MERGE_SUMMARY_SYSTEM_PROMPT = """
 _SUMMARY_CHUNK_THRESHOLD = 8000
 _SUMMARY_CHUNK_SIZE = 6000
 _SUMMARY_CHUNK_OVERLAP = 800
+
+
+def _summary_budget(duration_seconds: float | None) -> tuple[int, int, int]:
+    """Return target reading minutes, character cap, and highlight cap.
+
+    The product rule is one minute of reading per ten minutes of audio, capped
+    at ten minutes.  A 10-minute recording therefore targets one minute, while
+    a 100-minute recording targets at most ten.  Around 320 Chinese characters
+    per minute leaves room for headings and readable bullet spacing.
+    """
+    minutes = max(1, min(10, int((max(0.0, duration_seconds or 0.0) + 599) // 600)))
+    return minutes, minutes * 320, min(30, max(5, minutes * 3))
+
+
+def _budget_instruction(duration_seconds: float | None) -> str:
+    minutes, characters, highlights = _summary_budget(duration_seconds)
+    return (
+        f"\n\n閱讀預算：這段錄音約 {max(0, round(duration_seconds or 0))} 秒。"
+        f"摘要應在約 {minutes} 分鐘內讀完，總字數（overview 加 highlights）最多 {characters} 個中文字，"
+        f"重點最多 {highlights} 條；內容不足時可少於此數量。"
+    )
+
+
+def _apply_summary_budget(payload: dict[str, object], duration_seconds: float | None) -> dict[str, object]:
+    """Enforce the displayed reading budget even if a model over-produces."""
+    _, character_cap, highlight_cap = _summary_budget(duration_seconds)
+    overview = str(payload.get("overview", "")).strip()[: character_cap // 3].rstrip("，、；")
+    remaining = character_cap - len(overview)
+    highlights: list[str] = []
+    for raw_item in payload.get("highlights", []) or []:
+        item = str(raw_item).strip()
+        if not item or len(highlights) >= highlight_cap or remaining <= 0:
+            break
+        item = item[:remaining].rstrip("，、；")
+        if item:
+            highlights.append(item)
+            remaining -= len(item)
+    return {"title": str(payload.get("title", "")).strip(), "overview": overview, "highlights": highlights}
 
 def polish_with_ollama(raw_transcript: str) -> str:
     """Polish each speaker turn independently so labels and turn order cannot be rewritten.
@@ -159,7 +199,9 @@ def polish_with_ollama(raw_transcript: str) -> str:
     return apply_glossary("\n".join(output_lines).strip())
 
 
-def summarize_meeting_with_ollama(raw_transcript: str, fallback_title: str = "") -> dict[str, object]:
+def summarize_meeting_with_ollama(
+    raw_transcript: str, fallback_title: str = "", duration_seconds: float | None = None
+) -> dict[str, object]:
     """Return a structured, evidence-only summary from the local Ollama model.
 
     Short transcripts are summarized in a single call. Long transcripts (above
@@ -170,14 +212,14 @@ def summarize_meeting_with_ollama(raw_transcript: str, fallback_title: str = "")
     """
     transcript = (raw_transcript or "").strip()
     if len(transcript) <= _SUMMARY_CHUNK_THRESHOLD:
-        return _summarize_single(transcript, fallback_title)
+        return _summarize_single(transcript, fallback_title, duration_seconds)
 
     chunks = _split_transcript(transcript, _SUMMARY_CHUNK_SIZE, _SUMMARY_CHUNK_OVERLAP)
     partial_highlights: list[str] = []
     for chunk in chunks:
         try:
             chunk_payload = _ollama_chat_json(
-                _CHUNK_SUMMARY_SYSTEM_PROMPT,
+            _CHUNK_SUMMARY_SYSTEM_PROMPT + _budget_instruction(duration_seconds),
                 chunk,
                 timeout=120.0,
             )
@@ -201,7 +243,7 @@ def summarize_meeting_with_ollama(raw_transcript: str, fallback_title: str = "")
 
     try:
         merged = _ollama_chat_json(
-            _MERGE_SUMMARY_SYSTEM_PROMPT,
+            _MERGE_SUMMARY_SYSTEM_PROMPT + _budget_instruction(duration_seconds),
             "會議各段落討論重點如下：\n" + "\n".join(f"{i}. {h}" for i, h in enumerate(partial_highlights, 1)),
             timeout=180.0,
         )
@@ -209,7 +251,8 @@ def summarize_meeting_with_ollama(raw_transcript: str, fallback_title: str = "")
         # Merge step failed — degrade gracefully to the raw chunk highlights so
         # the meeting still gets a real (if un-polished) summary, never the
         # verbatim copy-transcript fallback.
-        return {"title": fallback_title or "會議重點摘要", "overview": "以下為根據本次逐字稿整理的重點。", "highlights": partial_highlights[:5]}
+        _, _, highlight_cap = _summary_budget(duration_seconds)
+        return _apply_summary_budget({"title": fallback_title or "會議重點摘要", "overview": "以下為根據本次逐字稿整理的重點。", "highlights": partial_highlights[:highlight_cap]}, duration_seconds)
 
     title = str(merged.get("title", "")).strip()[:80]
     overview = str(merged.get("overview", "")).strip()
@@ -219,13 +262,14 @@ def summarize_meeting_with_ollama(raw_transcript: str, fallback_title: str = "")
         # Reduce step under-delivered — degrade gracefully to the raw chunk list.
         overview = overview or "以下為根據本次逐字稿整理的重點。"
         highlights = partial_highlights
-    return {"title": title or fallback_title or "會議重點摘要", "overview": overview, "highlights": highlights[:5]}
+    _, _, highlight_cap = _summary_budget(duration_seconds)
+    return _apply_summary_budget({"title": title or fallback_title or "會議重點摘要", "overview": overview, "highlights": highlights[:highlight_cap]}, duration_seconds)
 
 
-def _summarize_single(transcript: str, fallback_title: str) -> dict[str, object]:
+def _summarize_single(transcript: str, fallback_title: str, duration_seconds: float | None) -> dict[str, object]:
     """Single-call summary for short transcripts."""
     payload = _ollama_chat_json(
-        _SUMMARY_SYSTEM_PROMPT,
+        _SUMMARY_SYSTEM_PROMPT + _budget_instruction(duration_seconds),
         transcript,
         timeout=180.0,
     )
@@ -235,7 +279,8 @@ def _summarize_single(transcript: str, fallback_title: str) -> dict[str, object]
     highlights = [str(item).strip() for item in raw_highlights if str(item).strip()] if isinstance(raw_highlights, list) else []
     if not overview or not highlights:
         raise OllamaError("本機 Ollama 未產生足夠的摘要內容。")
-    return {"title": title or fallback_title or "會議重點摘要", "overview": overview, "highlights": highlights[:5]}
+    _, _, highlight_cap = _summary_budget(duration_seconds)
+    return _apply_summary_budget({"title": title or fallback_title or "會議重點摘要", "overview": overview, "highlights": highlights[:highlight_cap]}, duration_seconds)
 
 
 def _ollama_chat_json(system_prompt: str, user_content: str, timeout: float) -> dict:

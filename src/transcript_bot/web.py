@@ -398,7 +398,9 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
             if request.form.get("form_action") == "summary":
                 aliases = get_speaker_aliases(app.config["DATA_DIR"], meeting.id, meeting.user_id)
                 transcript_text = apply_speaker_aliases(meeting.transcript_text, aliases)
-                summary = _generate_meeting_summary(transcript_text, meeting.title)
+                summary = _generate_meeting_summary(
+                    transcript_text, meeting.title, _meeting_duration_seconds(app.config["DATA_DIR"], meeting)
+                )
                 update_meeting_summary_text(app.config["DATA_DIR"], meeting.id, _serialize_summary(summary))
                 return redirect(url_for("edit_meeting", meeting_id=meeting.id, tab="summary"))
 
@@ -913,7 +915,9 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         if cancel_event.is_set():
             return
         _set_progress("summarizing", 90, "summarizing (會議摘要)")
-        summary = _generate_meeting_summary(transcript_text, Path(original_filename).stem[:160])
+        summary = _generate_meeting_summary(
+            transcript_text, Path(original_filename).stem[:160], duration
+        )
         update_meeting_summary_text(data_dir, job_id, _serialize_summary(summary))
 
         _set_progress("done", 100, "done (完成)")
@@ -1042,10 +1046,21 @@ def _purge_orphaned_meetings(data_dir: str) -> None:
             delete_meeting(data_dir, meeting.id, meeting.user_id)
 
 
-def _generate_meeting_summary(transcript: str, meeting_title: str) -> MeetingSummary:
+def _meeting_duration_seconds(data_dir: Path, meeting: object) -> float:
+    """Prefer the stored timeline; fall back to ffprobe for legacy meetings."""
+    segments = get_meeting_segments(data_dir, meeting.id, meeting.user_id)
+    if segments:
+        return max(0.0, max(segment.end for segment in segments))
+    audio_path = get_local_meeting_audio_path(data_dir, meeting.id)
+    return get_audio_duration(audio_path) if audio_path else 0.0
+
+
+def _generate_meeting_summary(
+    transcript: str, meeting_title: str, duration_seconds: float | None = None
+) -> MeetingSummary:
     """Use the local model when available, with a no-network readable fallback."""
     try:
-        payload = summarize_meeting_with_ollama(transcript, meeting_title)
+        payload = summarize_meeting_with_ollama(transcript, meeting_title, duration_seconds)
         return MeetingSummary(
             title=str(payload["title"]),
             overview=str(payload["overview"]),

@@ -185,6 +185,19 @@ class OllamaSummaryTests(unittest.TestCase):
         # One call => short path, no map-reduce chunking.
         self.assertEqual(post.call_count, 1)
 
+    def test_summary_prompt_scales_reading_budget_with_audio_duration(self) -> None:
+        resp = _chat_response('{"title":"會議","overview":"概述。","highlights":["重點一"]}')
+        with (
+            patch("transcript_bot.ollama_client.settings", self.settings),
+            patch("transcript_bot.ollama_client.httpx.post", return_value=resp) as post,
+        ):
+            summarize_meeting_with_ollama("Speaker 1：簡短內容。", duration_seconds=6000)
+
+        prompt = post.call_args.kwargs["json"]["messages"][0]["content"]
+        self.assertIn("約 10 分鐘內讀完", prompt)
+        self.assertIn("最多 3200 個中文字", prompt)
+        self.assertIn("重點最多 30 條", prompt)
+
     def test_schema_ignore_blob_raises_and_avoids_verbatim_fallback(self) -> None:
         # qwen3 over a long prompt sometimes echoes the transcript under a
         # "transcript" key instead of the requested title/overview/highlights.
