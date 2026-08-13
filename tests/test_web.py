@@ -17,7 +17,7 @@ from transcript_bot.database import (
     update_meeting_transcript_text,
 )
 from transcript_bot.transcription import TranscriptSegment
-from transcript_bot.database import save_transcript_segments
+from transcript_bot.database import get_meeting_speaker_labels, save_transcript_segments
 from transcript_bot.web import _sync_polished_segments, create_web_app
 from transcript_bot.formatting import split_segments_by_sentences
 from transcript_bot.job_status import get_job_status, write_job_status
@@ -348,6 +348,84 @@ class LocalWebCorrectionTests(unittest.TestCase):
             get_speaker_aliases(self.data_dir, self.meeting_id, 1001),
             {"Speaker 2": "新講者"},
         )
+
+    def test_merge_speakers_rewrites_timeline_and_removes_original_aliases(self) -> None:
+        save_transcript_segments(
+            self.data_dir,
+            self.meeting_id,
+            [
+                TranscriptSegment("Speaker 1", 1.5, 3.0, "第一段"),
+                TranscriptSegment("Speaker 2", 3.0, 5.0, "第二段"),
+            ],
+        )
+        self.client.post(
+            f"/meetings/{self.meeting_id}",
+            data={"form_action": "aliases", "alias_Speaker 1": "暫用名稱"},
+        )
+
+        response = self.client.post(
+            f"/meetings/{self.meeting_id}",
+            data={
+                "form_action": "merge_speakers",
+                "speaker_label": ["Speaker 1", "Speaker 2"],
+                "display_name": "威明",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"ok": True, "display_name": "威明"})
+        self.assertEqual(get_meeting_speaker_labels(self.data_dir, self.meeting_id), ["威明"])
+        self.assertEqual(
+            [(segment.speaker, segment.text) for segment in get_meeting_segments(self.data_dir, self.meeting_id, 1001)],
+            [("威明", "第一段"), ("威明", "第二段")],
+        )
+        self.assertEqual(get_speaker_aliases(self.data_dir, self.meeting_id, 1001), {})
+        meeting = get_local_meeting_export(self.data_dir, self.meeting_id)
+        assert meeting is not None
+        self.assertIn("威明：第一段", meeting.transcript_text)
+        self.assertNotIn("Speaker 1", meeting.transcript_text)
+
+    def test_clicking_a_speaker_name_uses_the_permanent_rename_flow(self) -> None:
+        response = self.client.get(f"/meetings/{self.meeting_id}")
+
+        self.assertEqual(response.status_code, 200)
+        page = response.data.decode()
+        self.assertIn("button.dataset.labels.split(',')", page)
+        self.assertIn("mergeSpeakers(button.dataset.labels.split(','),name.trim())", page)
+
+    def test_edit_page_allows_changing_one_segment_speaker(self) -> None:
+        save_transcript_segments(
+            self.data_dir,
+            self.meeting_id,
+            [
+                TranscriptSegment("Speaker 1", 1.5, 3.0, "第一段"),
+                TranscriptSegment("Speaker 2", 3.0, 5.0, "第二段"),
+            ],
+        )
+
+        response = self.client.post(
+            f"/meetings/{self.meeting_id}",
+            data={"form_action": "speaker", "sequence": "1", "speaker_label": "Speaker 2"},
+        )
+        page = self.client.get(f"/meetings/{self.meeting_id}").data.decode()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["display_name"], "Speaker 2")
+        self.assertEqual(
+            [(segment.speaker, segment.text) for segment in get_meeting_segments(self.data_dir, self.meeting_id, 1001)],
+            [("Speaker 2", "第一段"), ("Speaker 2", "第二段")],
+        )
+        self.assertIn('class="speaker-name editable-segment-speaker"', page)
+        self.assertIn("替換這一句的主講者標籤", page)
+
+    def test_edit_page_rejects_changing_one_segment_to_a_new_speaker(self) -> None:
+        response = self.client.post(
+            f"/meetings/{self.meeting_id}",
+            data={"form_action": "speaker", "sequence": "1", "speaker_label": "不存在的新講者"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json(), {"error": "只能替換為上方已存在的主講人。"})
 
     def test_edit_page_binds_add_speaker_in_the_page_script(self) -> None:
         response = self.client.get(f"/meetings/{self.meeting_id}")

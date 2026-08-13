@@ -34,6 +34,7 @@ from transcript_bot.database import (
     init_database,
     list_meeting_exports,
     list_local_meeting_exports,
+    merge_meeting_speakers,
     replace_speaker_aliases,
     save_transcript_segments,
     update_meeting_metadata,
@@ -443,6 +444,10 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
                 new_label = request.form.get("speaker_label", "").strip()
                 if not new_label:
                     return jsonify({"error": "請指定主講人。"}), 400
+                valid_labels = set(get_meeting_speaker_labels(app.config["DATA_DIR"], meeting.id))
+                valid_labels.update(get_speaker_aliases(app.config["DATA_DIR"], meeting.id, meeting.user_id))
+                if new_label not in valid_labels:
+                    return jsonify({"error": "只能替換為上方已存在的主講人。"}), 400
                 if not update_transcript_segment_speaker(
                     app.config["DATA_DIR"], meeting.id, meeting.user_id, sequence, new_label
                 ):
@@ -485,6 +490,22 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
                 if request.form.get("ajax") == "1":
                     return jsonify({"aliases": aliases})
                 return redirect(url_for("edit_meeting", meeting_id=meeting.id, aliases_saved="1"))
+
+            if request.form.get("form_action") == "merge_speakers":
+                labels = request.form.getlist("speaker_label")
+                display_name = request.form.get("display_name", "").strip()
+                if not merge_meeting_speakers(
+                    app.config["DATA_DIR"], meeting.id, meeting.user_id, labels, display_name
+                ):
+                    return jsonify({"error": "請選擇現有講者並輸入共同名稱。"}), 400
+                segments = get_meeting_segments(app.config["DATA_DIR"], meeting.id, meeting.user_id)
+                transcript_text = "\n\n".join(
+                    f"{segment.speaker}：{segment.text}" for segment in segments if segment.text.strip()
+                )
+                update_meeting_transcript_text(
+                    app.config["DATA_DIR"], meeting.id, transcript_text, preserve_summary=True
+                )
+                return jsonify({"ok": True, "display_name": display_name})
 
             aliases = get_speaker_aliases(app.config["DATA_DIR"], meeting.id, meeting.user_id)
             transcript_text = _restore_speaker_labels(request.form.get("transcript_text", "").strip(), aliases)
@@ -561,10 +582,10 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
 
         aliases = get_speaker_aliases(app.config["DATA_DIR"], meeting.id, meeting.user_id)
         transcript_text = apply_speaker_aliases(meeting.transcript_text, aliases)
-        speaker_names = [
+        speaker_names = list(dict.fromkeys(
             aliases.get(label, label)
             for label in get_meeting_speaker_labels(app.config["DATA_DIR"], meeting.id)
-        ]
+        ))
         if file_type == "txt":
             export_path = Path(meeting.transcript_txt_path).resolve()
             write_text(export_path, transcript_text)

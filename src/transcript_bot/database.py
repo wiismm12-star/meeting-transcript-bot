@@ -605,6 +605,42 @@ def replace_speaker_aliases(data_dir: Path, meeting_id: str, user_id: int, alias
         )
 
 
+def merge_meeting_speakers(
+    data_dir: Path, meeting_id: str, user_id: int, labels: list[str], display_name: str
+) -> bool:
+    """Permanently merge selected speaker labels into one displayed name."""
+    selected_labels = list(dict.fromkeys(label.strip() for label in labels if label.strip()))
+    name = display_name.strip()
+    if not selected_labels or not name:
+        return False
+
+    placeholders = ", ".join("?" for _ in selected_labels)
+    with _connect(data_dir) as conn:
+        owner = conn.execute(
+            "SELECT 1 FROM meetings WHERE id = ? AND user_id = ?", (meeting_id, user_id)
+        ).fetchone()
+        if not owner:
+            return False
+        existing = conn.execute(
+            f"SELECT DISTINCT speaker_label FROM transcript_segments "
+            f"WHERE meeting_id = ? AND speaker_label IN ({placeholders})",
+            (meeting_id, *selected_labels),
+        ).fetchall()
+        if {str(row["speaker_label"]) for row in existing} != set(selected_labels):
+            return False
+        conn.execute(
+            f"UPDATE transcript_segments SET speaker_label = ? "
+            f"WHERE meeting_id = ? AND speaker_label IN ({placeholders})",
+            (name, meeting_id, *selected_labels),
+        )
+        conn.execute(
+            f"DELETE FROM speaker_aliases WHERE meeting_id = ? AND user_id = ? "
+            f"AND original_label IN ({placeholders})",
+            (meeting_id, user_id, *selected_labels),
+        )
+    return True
+
+
 def get_speaker_aliases(data_dir: Path, meeting_id: str, user_id: int) -> dict[str, str]:
     with _connect(data_dir) as conn:
         rows = conn.execute(
