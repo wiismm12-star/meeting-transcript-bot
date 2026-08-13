@@ -1,218 +1,26 @@
-{% extends "base.html" %}{% block title %}{{ meeting.title or '未命名會議' }}
-<script>
-// ── Speaker dropdown ──
-(function(){
-  const allChips = document.querySelectorAll(".chips .chip:not(.add-speaker-chip)");
-  let openMenu = null;
-
-  function closeMenu() { if (openMenu) { openMenu.remove(); openMenu = null; } }
-
-  function getSpeakerOptions() {
-    return Array.from(allChips).map(c => ({
-      label: c.dataset.label,
-      name: c.dataset.name || c.dataset.label
-    }));
-  }
-
-  document.querySelectorAll(".speaker-dropdown").forEach(el => {
-    el.addEventListener("click", e => {
-      e.stopPropagation();
-      if (openMenu && openMenu.parentElement === el) { closeMenu(); return; }
-      closeMenu();
-      const menu = document.createElement("div");
-      menu.className = "speaker-dropdown-menu open";
-      const current = el.dataset.speaker;
-      getSpeakerOptions().forEach(opt => {
-        const btn = document.createElement("button");
-        const active = opt.label === current;
-        btn.innerHTML = '<span class="mini-dot" style="background:' + (active ? "var(--teal)" : "#c0cdd3") + '"></span>' + opt.name;
-        if (active) btn.style.fontWeight = "700";
-        btn.addEventListener("click", async () => {
-          closeMenu();
-          if (opt.label === current) return;
-          const form = new FormData();
-          form.set("form_action", "speaker");
-          form.set("sequence", el.dataset.sequence);
-          form.set("speaker_label", opt.label);
-          const resp = await fetch(location.pathname, {method:"POST", body:form});
-          if (!resp.ok) { alert("更換主講人失敗。"); return; }
-          const data = await resp.json();
-          el.dataset.speaker = data.speaker_label;
-            el.textContent = data.display_name;
-            const row = el.closest(".segment-row"); if (row) { const av = row.querySelector(".avatar"); if (av) av.textContent = data.display_name.charAt(0); }
-        });
-        menu.appendChild(btn);
-      });
-      el.appendChild(menu);
-      openMenu = menu;
-    });
-  });
-
-  document.addEventListener("click", closeMenu);
-
-  // ── Add speaker button ──
-  const addBtn = document.getElementById("add-speaker-btn");
-  if (addBtn) {
-    addBtn.addEventListener("click", async e => {
-      e.stopPropagation();
-      const name = prompt("請輸入新講者名稱（例如：張老師）");
-      if (!name || !name.trim()) return;
-      const label = "Speaker " + (allChips.length + 1);
-      const form = document.getElementById("alias-sync");
-      let input = form.elements["alias_" + label];
-      if (!input) { input = document.createElement("input"); input.type = "hidden"; input.name = "alias_" + label; form.appendChild(input); }
-      input.value = name.trim();
-      const resp = await fetch(location.pathname, {method:"POST", body:new FormData(form)});
-      if (!resp.ok) { alert("新增講者失敗。"); return; }
-      location.reload();
-    });
-  }
-})();
-
-// ── Speaker colors ──
-(function(){
-  const PALETTE = ["#ffb3b8","#f56aaa","#c8b8e8","#8bc4d0","#f0c78e","#a8d8a8","#e8c8a0","#b8c8e8"];
-  const speakerLabels = Array.from(document.querySelectorAll(".chips .chip:not(.add-speaker-chip)")).map(c=>c.dataset.label);
-  function colorFor(speaker){
-    const idx = speakerLabels.indexOf(speaker);
-    return PALETTE[idx>=0?idx%PALETTE.length:0];
-  }
-  function applyColors(){
-    document.querySelectorAll(".chip-dot").forEach(dot=>{
-      const chip = dot.closest(".chip");
-      if(chip&&chip.dataset.label) dot.style.background=colorFor(chip.dataset.label);
-    });
-    document.querySelectorAll(".avatar").forEach(av=>{
-      const name = av.closest(".segment-row")?.querySelector(".speaker-dropdown");
-      if(name&&name.dataset.speaker) av.style.background=colorFor(name.dataset.speaker);
-    });
-  }
-  applyColors();
-  new MutationObserver(applyColors).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:["data-speaker"]});
-})();
-</script>
-
-{% endblock %}{% block content %}<style>
-.speaker-dropdown { cursor: pointer; position: relative; user-select: none; }
-.speaker-dropdown:hover { color: var(--teal); }
-.speaker-dropdown-menu { position: absolute; z-index: 20; top: 100%; left: 0; min-width: 140px; background: #fff; border: 1px solid #dce7e9; border-radius: 10px; box-shadow: 0 8px 20px #173d4924; padding: 4px; display: none; }
-.speaker-dropdown-menu.open { display: block; }
-.speaker-dropdown-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 12px; border: 0; border-radius: 6px; background: transparent; color: #35414c; font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
-.speaker-dropdown-menu button:hover { background: #eefafa; color: var(--teal-dark); }
-.speaker-dropdown-menu button .mini-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+{% extends "base.html" %}{% block title %}{{ meeting.title or '未命名會議' }}{% endblock %}{% block content %}<style>
 .add-speaker-chip { font-weight: 700; font-size: 18px; padding: 5px 11px !important; background: #eefafa !important; color: var(--teal) !important; }
 .add-speaker-chip:hover { background: #d4f0ef !important; }
 </style>
 <div class="workspace-layout"><aside class="meeting-sidebar"><a class="sidebar-home" href="{{ url_for('index') }}"><span>⌂</span> 所有會議</a><div class="sidebar-heading"><span>會議紀錄</span><small>{{ sidebar_meetings|length }}</small></div><nav class="sidebar-meetings">{% for item in sidebar_meetings %}<a class="sidebar-meeting {{ 'current' if item.id == meeting.id }}" href="{{ url_for('edit_meeting',meeting_id=item.id) }}"><span class="sidebar-dot"></span><span><strong>{{ item.title or item.created_at[:16] }}</strong><small>{{ item.created_at[:16] }}</small></span></a>{% endfor %}</nav></aside><div class="workspace-content">
   <header class="meeting-header"><div class="title-row"><form method="post" class="title-form" id="title-form"><input type="hidden" name="form_action" value="metadata"><span class="title-display" id="title-display">{{ meeting.title or '未命名會議' }}</span><input id="title-input" name="title" value="{{ meeting.title }}" placeholder="未命名會議" maxlength="160" aria-label="會議名稱" hidden><button id="save-title" type="submit" hidden aria-label="儲存會議名稱">✓</button><button id="cancel-title" class="cancel-title" type="button" hidden aria-label="取消修改">×</button></form><span class="menu-wrap"><button id="menu-toggle" class="menu-toggle" type="button">⋮</button><span id="meeting-menu" class="meeting-menu" hidden><button id="copy-link" type="button">⌯　複製連結</button><form method="post" action="{{ url_for('delete_local_meeting',meeting_id=meeting.id) }}" id="delete-form"><button type="submit">■　刪除會議</button></form></span></span></div></header>
-  <div class="meeting-info"><div class="info-row meta"><span class="icon">◷</span>{{ meeting.created_at }} ～ 音檔結束</div><div class="info-row"><div class="chips">{% for label in speaker_labels %}{% set speaker_start = namespace(value=none) %}{% for segment in segments %}{% if speaker_start.value is none and segment.speaker == label %}{% set speaker_start.value = segment.start %}{% endif %}{% endfor %}<span class="chip speaker-chip" data-label="{{ label }}" data-name="{{ aliases.get(label,label) }}"><button class="chip-dot speaker-jump" type="button"{% if speaker_start.value is not none %} data-start="{{ speaker_start.value }}" aria-label="跳到 {{ aliases.get(label,label) }} 的第一句" title="跳到第一句"{% else %} disabled aria-label="{{ aliases.get(label,label) }} 尚無逐字稿"{% endif %}>{{ aliases.get(label,label)[0] }}</button><button class="speaker-name editable-chip" type="button" data-label="{{ label }}" data-name="{{ aliases.get(label,label) }}" aria-label="修改 {{ aliases.get(label,label) }} 的名稱">{{ aliases.get(label,label) }}</button></span>{% endfor %}<button class="chip add-speaker-chip" type="button" title="新增講者" id="add-speaker-btn">+</button></div></div></div>
+  <div class="meeting-info"><div class="info-row meta"><span class="icon">◷</span>{{ meeting.created_at }} ～ 音檔結束</div><div class="info-row"><div class="chips">{% for group in speaker_groups %}<span class="chip speaker-chip"><button class="chip-dot speaker-jump" type="button"{% if group.sequence is not none %} data-target="segment-{{ group.sequence }}" aria-label="跳到 {{ group.name }} 的第一句文字稿" title="跳到第一句文字稿"{% else %} disabled{% endif %}>{{ group.name[0] }}</button><button class="speaker-name group-edit" type="button" data-labels="{{ group.labels|join(',') }}" data-name="{{ group.name }}" aria-label="修改 {{ group.name }} 的名稱">{{ group.name }}{% if group.labels|length > 1 %} · {{ group.labels|length }} 群組{% endif %}</button></span>{% endfor %}<button class="chip manage-speakers-chip" type="button" id="manage-speakers-btn">管理講者</button><button class="chip add-speaker-chip" type="button" title="新增講者" id="add-speaker-btn">+</button></div></div></div>
   <form id="alias-sync" method="post"><input type="hidden" name="form_action" value="aliases"><input type="hidden" name="ajax" value="1">{% for label in speaker_labels %}<input type="hidden" name="alias_{{ label }}" value="{{ aliases.get(label,'') }}">{% endfor %}</form>
+  <dialog id="manage-speakers-dialog"><form method="dialog" class="manage-speakers"><h2>管理講者</h2><p>勾選要視為同一人的聲音群組，再輸入共同名稱。</p>{% for label in speaker_labels %}<label><input type="checkbox" value="{{ label }}"> {{ label }}　<span>{{ aliases.get(label,label) }}</span></label>{% endfor %}<input id="merge-speaker-name" placeholder="共同名稱，例如：威明"><div><button value="cancel">取消</button><button id="merge-speakers-save" value="default">合併儲存</button></div></form></dialog>
+  <script>const manageDialog=document.getElementById('manage-speakers-dialog'),manageBtn=document.getElementById('manage-speakers-btn'),mergeName=document.getElementById('merge-speaker-name');const saveGroup=async(labels,name)=>{if(!name||!labels.length)return;const form=document.getElementById('alias-sync');labels.forEach(label=>form.elements[`alias_${label}`].value=name);const response=await fetch(location.pathname,{method:'POST',body:new FormData(form)});if(!response.ok){alert('儲存講者合併失敗。');return;}location.reload();};manageBtn?.addEventListener('click',()=>manageDialog.showModal());document.getElementById('merge-speakers-save')?.addEventListener('click',event=>{event.preventDefault();saveGroup(Array.from(manageDialog.querySelectorAll('input:checked')).map(input=>input.value),mergeName.value.trim());});document.querySelectorAll('.group-edit').forEach(button=>button.addEventListener('click',()=>{const name=prompt('講者名稱',button.dataset.name);if(name!==null)saveGroup(button.dataset.labels.split(','),name.trim());}));</script>
   {% if saved %}<p class="notice">已儲存逐字稿。</p>{% endif %}{% if aliases_saved %}<p class="notice">已儲存主講人名稱。</p>{% endif %}{% if metadata_saved %}<p class="notice">已儲存會議名稱。</p>{% endif %}{% if notes_saved %}<p class="notice">已儲存會議筆記。</p>{% endif %}{% if error %}<p class="error">{{ error }}</p>{% endif %}
   <nav class="tabs"><a class="{{ 'active' if active_tab == 'transcript' }}" href="{{ url_for('edit_meeting',meeting_id=meeting.id,tab='transcript') }}">會議逐字稿</a><a class="{{ 'active' if active_tab == 'summary' }}" href="{{ url_for('edit_meeting',meeting_id=meeting.id,tab='summary') }}">會議摘要</a><a class="{{ 'active' if active_tab == 'notes' }}" href="{{ url_for('edit_meeting',meeting_id=meeting.id,tab='notes') }}">團隊筆記</a></nav>
   {% if active_tab == 'transcript' %}
-    <section class="segments">{% for segment in segments %}<article class="segment segment-row"><button type="button" class="avatar play-segment" data-start="{{ segment.start }}" aria-label="從 {{ '%d:%02d'|format((segment.start or 0)|int // 60, (segment.start or 0)|int % 60) }} 播放">{{ aliases.get(segment.speaker,segment.speaker)[0] }}</button><span class="segment-head"><strong class="speaker-name speaker-dropdown" data-speaker="{{ segment.speaker }}" data-sequence="{{ loop.index }}" tabindex="0">{{ aliases.get(segment.speaker,segment.speaker) }}</strong><button type="button" class="time play-segment" data-start="{{ segment.start }}" aria-label="從 {{ '%d:%02d'|format((segment.start or 0)|int // 60, (segment.start or 0)|int % 60) }} 播放">{{ '%d:%02d'|format((segment.start or 0)|int // 60, (segment.start or 0)|int % 60) }}</button></span><span class="segment-editor" data-sequence="{{ loop.index }}"><span class="segment-text editable-segment">{{ segment.text }}</span><input class="segment-input" value="{{ segment.text }}" hidden><button class="save-segment" type="button" hidden>✓</button><button class="cancel-segment" type="button" hidden>×</button></span></article>{% endfor %}</section>
+    <section class="segments">{% for segment in segments %}<article class="segment segment-row" id="segment-{{ loop.index }}"><button type="button" class="avatar play-segment" data-start="{{ segment.start }}" aria-label="從 {{ '%d:%02d'|format((segment.start or 0)|int // 60, (segment.start or 0)|int % 60) }} 播放">{{ aliases.get(segment.speaker,segment.speaker)[0] }}</button><span class="segment-head"><strong class="speaker-name" data-speaker="{{ segment.speaker }}">{{ aliases.get(segment.speaker,segment.speaker) }}</strong><button type="button" class="time play-segment" data-start="{{ segment.start }}" aria-label="從 {{ '%d:%02d'|format((segment.start or 0)|int // 60, (segment.start or 0)|int % 60) }} 播放">{{ '%d:%02d'|format((segment.start or 0)|int // 60, (segment.start or 0)|int % 60) }}</button></span><span class="segment-editor" data-sequence="{{ loop.index }}"><span class="segment-text editable-segment">{{ segment.text }}</span><input class="segment-input" value="{{ segment.text }}" hidden><button class="save-segment" type="button" hidden>✓</button><button class="cancel-segment" type="button" hidden>×</button></span></article>{% endfor %}</section>
   {% elif active_tab == 'summary' %}<section class="summary-workbench"><div class="summary-toolbar"><span class="summary-label"><span aria-hidden="true">▧</span> 會議摘要</span><form method="post"><input type="hidden" name="form_action" value="summary"><button class="summary-refresh" type="submit">↻　重新產生摘要</button></form></div>{% if summary %}<article class="summary-card"><h2>{{ summary.title }}</h2><p class="summary-overview">{{ summary.overview }}</p><ul>{% for highlight in summary.highlights %}<li>{{ highlight }}</li>{% endfor %}</ul></article>{% else %}<article class="summary-card summary-empty"><h2>尚未產生摘要</h2><p>請按「重新產生摘要」整理本次會議內容。</p></article>{% endif %}</section>
   {% else %}<section class="summary-panel"><h2>團隊筆記</h2><form method="post"><input type="hidden" name="form_action" value="notes"><textarea name="notes" placeholder="記錄補充事項、想法或後續追蹤。">{{ meeting.notes }}</textarea><p><button type="submit">儲存筆記</button></p></form></section>{% endif %}
   {% if audio_available %}<div class="audio-dock" aria-label="音訊播放器"><audio id="meeting-audio" preload="metadata" src="{{ url_for('meeting_audio',meeting_id=meeting.id) }}"></audio><button class="audio-action" id="skip-back" type="button" data-tooltip="倒退 10 秒" aria-label="倒退 10 秒"><span class="turn-arrow">↶</span><b>10</b></button><button class="play-toggle" id="play-toggle" type="button" data-tooltip="播放" aria-label="播放"><span class="play-icon">▶</span></button><button class="audio-action" id="skip-forward" type="button" data-tooltip="快轉 10 秒" aria-label="快轉 10 秒"><span class="turn-arrow">↷</span><b>10</b></button><span class="audio-time" id="current-time">0:00</span><input class="audio-progress" id="audio-progress" type="range" min="0" max="0" value="0" step="0.1" aria-label="播放進度"><span class="audio-time" id="duration">0:00</span><span class="audio-downloads"><a href="{{ url_for('download_transcript',meeting_id=meeting.id,file_type='txt') }}" data-tooltip="下載 TXT 逐字稿" aria-label="下載 TXT 逐字稿"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.8h8l4 4V21H6z"/><path d="M14 2.8v4h4M8.2 12.2h7.6M8.2 15.2h7.6M8.2 18.2h4.4"/><path d="M12 8.8v5.5m-2.2-2.2L12 14.3l2.2-2.2"/></svg></a><a class="word-download" href="{{ url_for('download_transcript',meeting_id=meeting.id,file_type='docx') }}" data-tooltip="下載 Word 逐字稿" aria-label="下載 Word 逐字稿"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2.8h8l4 4V21H6z"/><path d="M14 2.8v4h4"/><path d="m7.7 10.6 1.4 6 1.5-4.2 1.4 4.2 1.5-6 1 6h1.8"/></svg></a></span></div>{% endif %}
   <script>
-    const audio=document.getElementById('meeting-audio'); const formatTime=value=>{const seconds=Math.max(0,Math.floor(Number(value)||0));return `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;};const playFrom=seconds=>{if(!audio)return;audio.currentTime=Math.max(0,Math.min(Number(seconds)||0,audio.duration||Infinity));audio.play().catch(()=>{});};if(audio){const playToggle=document.getElementById('play-toggle'),playIcon=playToggle.querySelector('.play-icon'),progress=document.getElementById('audio-progress'),currentTime=document.getElementById('current-time'),duration=document.getElementById('duration');const sync=()=>{progress.value=audio.currentTime||0;currentTime.textContent=formatTime(audio.currentTime);};const syncDuration=()=>{progress.max=audio.duration||0;duration.textContent=formatTime(audio.duration);};const syncPlay=()=>{const isPlaying=!audio.paused;playIcon.textContent=isPlaying?'❚❚':'▶';const label=isPlaying?'暫停':'播放';playToggle.dataset.tooltip=label;playToggle.setAttribute('aria-label',label);};playToggle.addEventListener('click',()=>audio.paused?audio.play():audio.pause());document.getElementById('skip-back').addEventListener('click',()=>audio.currentTime=Math.max(0,audio.currentTime-10));document.getElementById('skip-forward').addEventListener('click',()=>audio.currentTime=Math.min(audio.duration||Infinity,audio.currentTime+10));progress.addEventListener('input',()=>audio.currentTime=Number(progress.value));audio.addEventListener('loadedmetadata',syncDuration);audio.addEventListener('timeupdate',sync);audio.addEventListener('play',syncPlay);audio.addEventListener('pause',syncPlay);audio.addEventListener('ended',syncPlay);audio.addEventListener('error',()=>{duration.textContent='音檔無法載入';});syncDuration();sync();syncPlay();}document.querySelectorAll('.play-segment,.speaker-jump').forEach(control=>control.addEventListener('click',()=>playFrom(control.dataset.start)));
+    const audio=document.getElementById('meeting-audio'); const formatTime=value=>{const seconds=Math.max(0,Math.floor(Number(value)||0));return `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;};const playFrom=seconds=>{if(!audio)return;audio.currentTime=Math.max(0,Math.min(Number(seconds)||0,audio.duration||Infinity));audio.play().catch(()=>{});};if(audio){const playToggle=document.getElementById('play-toggle'),playIcon=playToggle.querySelector('.play-icon'),progress=document.getElementById('audio-progress'),currentTime=document.getElementById('current-time'),duration=document.getElementById('duration');const sync=()=>{progress.value=audio.currentTime||0;currentTime.textContent=formatTime(audio.currentTime);};const syncDuration=()=>{progress.max=audio.duration||0;duration.textContent=formatTime(audio.duration);};const syncPlay=()=>{const isPlaying=!audio.paused;playIcon.textContent=isPlaying?'❚❚':'▶';const label=isPlaying?'暫停':'播放';playToggle.dataset.tooltip=label;playToggle.setAttribute('aria-label',label);};playToggle.addEventListener('click',()=>audio.paused?audio.play():audio.pause());document.getElementById('skip-back').addEventListener('click',()=>audio.currentTime=Math.max(0,audio.currentTime-10));document.getElementById('skip-forward').addEventListener('click',()=>audio.currentTime=Math.min(audio.duration||Infinity,audio.currentTime+10));progress.addEventListener('input',()=>audio.currentTime=Number(progress.value));audio.addEventListener('loadedmetadata',syncDuration);audio.addEventListener('timeupdate',sync);audio.addEventListener('play',syncPlay);audio.addEventListener('pause',syncPlay);audio.addEventListener('ended',syncPlay);audio.addEventListener('error',()=>{duration.textContent='音檔無法載入';});syncDuration();sync();syncPlay();}document.querySelectorAll('.play-segment').forEach(control=>control.addEventListener('click',()=>playFrom(control.dataset.start)));document.querySelectorAll('.speaker-jump').forEach(control=>control.addEventListener('click',()=>{const target=document.getElementById(control.dataset.target);if(target){target.scrollIntoView({behavior:'smooth',block:'center'});target.classList.add('segment-focus');setTimeout(()=>target.classList.remove('segment-focus'),1600);}}));
     const titleDisplay=document.getElementById('title-display'),titleInput=document.getElementById('title-input'),saveTitle=document.getElementById('save-title'),cancelTitle=document.getElementById('cancel-title');let savingTitle=false;const closeTitle=()=>{titleInput.value=titleInput.defaultValue;titleInput.hidden=true;titleDisplay.hidden=false;saveTitle.hidden=true;cancelTitle.hidden=true;savingTitle=false;};titleDisplay.addEventListener('click',()=>{titleDisplay.hidden=true;titleInput.hidden=false;saveTitle.hidden=false;cancelTitle.hidden=false;titleInput.focus();titleInput.select();});saveTitle.addEventListener('mousedown',()=>savingTitle=true);titleInput.addEventListener('blur',()=>setTimeout(()=>{if(!savingTitle)closeTitle();},0));cancelTitle.addEventListener('click',closeTitle);
     const menuToggle=document.getElementById('menu-toggle'),meetingMenu=document.getElementById('meeting-menu');menuToggle.addEventListener('click',()=>meetingMenu.hidden=!meetingMenu.hidden);document.getElementById('copy-link').addEventListener('click',async()=>{await navigator.clipboard.writeText(location.href);meetingMenu.hidden=true;alert('已複製會議連結。');});document.getElementById('delete-form').addEventListener('submit',e=>{if(!confirm('確定要刪除這場會議及其本機檔案嗎？此操作無法復原。'))e.preventDefault();});
+    const addSpeakerButton=document.getElementById('add-speaker-btn');addSpeakerButton?.addEventListener('click',async()=>{const name=prompt('請輸入新講者名稱（例如：張老師）');if(!name||!name.trim())return;const form=document.getElementById('alias-sync'),speakerNumbers=Array.from(form.querySelectorAll('input[name^="alias_Speaker "]')).map(input=>Number(input.name.replace('alias_Speaker ',''))).filter(Number.isFinite),label=`Speaker ${Math.max(0,...speakerNumbers)+1}`;let input=form.elements[`alias_${label}`];if(!input){input=document.createElement('input');input.type='hidden';input.name=`alias_${label}`;form.appendChild(input);}input.value=name.trim();const response=await fetch(location.pathname,{method:'POST',body:new FormData(form)});if(!response.ok){alert('新增講者失敗。');return;}location.reload();});
     document.querySelectorAll('.editable-chip').forEach(chip=>chip.addEventListener('click',async()=>{const label=chip.dataset.label;const old=chip.dataset.name;const name=prompt(`${label} 的名稱`,old);if(name===null)return;const cleaned=name.trim();const form=document.getElementById('alias-sync');form.elements[`alias_${label}`].value=cleaned===label?'':cleaned;const response=await fetch(location.pathname,{method:'POST',body:new FormData(form)});if(!response.ok){alert('儲存主講人名稱失敗。');return;}const shown=cleaned||label;const speakerChip=chip.closest('.speaker-chip');chip.dataset.name=shown;if(speakerChip)speakerChip.dataset.name=shown;const dot=speakerChip?.querySelector(".chip-dot");if(dot)dot.textContent=shown.charAt(0);chip.textContent=shown;document.querySelectorAll(`[data-speaker="${CSS.escape(label)}"]`).forEach(el=>{el.textContent=shown;const row=el.closest(".segment-row");if(row){const av=row.querySelector(".avatar");if(av)av.textContent=shown.charAt(0);}});}));
     document.querySelectorAll('.segment-editor').forEach(editor=>{const text=editor.querySelector('.segment-text'),input=editor.querySelector('.segment-input'),save=editor.querySelector('.save-segment'),cancel=editor.querySelector('.cancel-segment');let saving=false;const close=()=>{input.value=text.textContent.trim();input.hidden=true;save.hidden=true;cancel.hidden=true;text.hidden=false;saving=false;};text.addEventListener('click',()=>{text.hidden=true;input.hidden=false;save.hidden=false;cancel.hidden=false;input.focus();input.select();});save.addEventListener('mousedown',()=>saving=true);input.addEventListener('blur',()=>setTimeout(()=>{if(!saving)close();},0));cancel.addEventListener('click',close);save.addEventListener('click',async()=>{const value=input.value.trim();if(!value){alert('逐字稿不可留白。');saving=false;input.focus();return;}const form=new FormData();form.set('form_action','segment');form.set('sequence',editor.dataset.sequence);form.set('text',value);const response=await fetch(location.pathname,{method:'POST',body:form});if(!response.ok){alert('儲存逐字稿失敗。');saving=false;input.focus();return;}text.textContent=value;close();});});
   </script></div></div>
-
-<script>
-// ── Speaker dropdown ──
-(function(){
-  const allChips = document.querySelectorAll(".chips .chip:not(.add-speaker-chip)");
-  let openMenu = null;
-
-  function closeMenu() { if (openMenu) { openMenu.remove(); openMenu = null; } }
-
-  function getSpeakerOptions() {
-    return Array.from(allChips).map(c => ({
-      label: c.dataset.label,
-      name: c.dataset.name || c.dataset.label
-    }));
-  }
-
-  document.querySelectorAll(".speaker-dropdown").forEach(el => {
-    el.addEventListener("click", e => {
-      e.stopPropagation();
-      if (openMenu && openMenu.parentElement === el) { closeMenu(); return; }
-      closeMenu();
-      const menu = document.createElement("div");
-      menu.className = "speaker-dropdown-menu open";
-      const current = el.dataset.speaker;
-      getSpeakerOptions().forEach(opt => {
-        const btn = document.createElement("button");
-        const active = opt.label === current;
-        btn.innerHTML = '<span class="mini-dot" style="background:' + (active ? "var(--teal)" : "#c0cdd3") + '"></span>' + opt.name;
-        if (active) btn.style.fontWeight = "700";
-        btn.addEventListener("click", async () => {
-          closeMenu();
-          if (opt.label === current) return;
-          const form = new FormData();
-          form.set("form_action", "speaker");
-          form.set("sequence", el.dataset.sequence);
-          form.set("speaker_label", opt.label);
-          const resp = await fetch(location.pathname, {method:"POST", body:form});
-          if (!resp.ok) { alert("更換主講人失敗。"); return; }
-          const data = await resp.json();
-          el.dataset.speaker = data.speaker_label;
-            el.textContent = data.display_name;
-            const row = el.closest(".segment-row"); if (row) { const av = row.querySelector(".avatar"); if (av) av.textContent = data.display_name.charAt(0); }
-        });
-        menu.appendChild(btn);
-      });
-      el.appendChild(menu);
-      openMenu = menu;
-    });
-  });
-
-  document.addEventListener("click", closeMenu);
-
-  // ── Add speaker button ──
-  const addBtn = document.getElementById("add-speaker-btn");
-  if (addBtn) {
-    addBtn.addEventListener("click", async e => {
-      e.stopPropagation();
-      const name = prompt("請輸入新講者名稱（例如：張老師）");
-      if (!name || !name.trim()) return;
-      const label = "Speaker " + (allChips.length + 1);
-      const form = document.getElementById("alias-sync");
-      let input = form.elements["alias_" + label];
-      if (!input) { input = document.createElement("input"); input.type = "hidden"; input.name = "alias_" + label; form.appendChild(input); }
-      input.value = name.trim();
-      const resp = await fetch(location.pathname, {method:"POST", body:new FormData(form)});
-      if (!resp.ok) { alert("新增講者失敗。"); return; }
-      location.reload();
-    });
-  }
-})();
-
-// ── Speaker colors ──
-(function(){
-  const PALETTE = ["#ffb3b8","#f56aaa","#c8b8e8","#8bc4d0","#f0c78e","#a8d8a8","#e8c8a0","#b8c8e8"];
-  const speakerLabels = Array.from(document.querySelectorAll(".chips .chip:not(.add-speaker-chip)")).map(c=>c.dataset.label);
-  function colorFor(speaker){
-    const idx = speakerLabels.indexOf(speaker);
-    return PALETTE[idx>=0?idx%PALETTE.length:0];
-  }
-  function applyColors(){
-    document.querySelectorAll(".chip-dot").forEach(dot=>{
-      const chip = dot.closest(".chip");
-      if(chip&&chip.dataset.label) dot.style.background=colorFor(chip.dataset.label);
-    });
-    document.querySelectorAll(".avatar").forEach(av=>{
-      const name = av.closest(".segment-row")?.querySelector(".speaker-dropdown");
-      if(name&&name.dataset.speaker) av.style.background=colorFor(name.dataset.speaker);
-    });
-  }
-  applyColors();
-  new MutationObserver(applyColors).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:["data-speaker"]});
-})();
-</script>
-
 {% endblock %}

@@ -336,6 +336,27 @@ class LocalWebCorrectionTests(unittest.TestCase):
             {"Speaker 1": "主持人"},
         )
 
+    def test_edit_page_can_save_a_new_speaker_alias(self) -> None:
+        response = self.client.post(
+            f"/meetings/{self.meeting_id}",
+            data={"form_action": "aliases", "ajax": "1", "alias_Speaker 2": "新講者"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"aliases": {"Speaker 2": "新講者"}})
+        self.assertEqual(
+            get_speaker_aliases(self.data_dir, self.meeting_id, 1001),
+            {"Speaker 2": "新講者"},
+        )
+
+    def test_edit_page_binds_add_speaker_in_the_page_script(self) -> None:
+        response = self.client.get(f"/meetings/{self.meeting_id}")
+
+        page = response.data.decode()
+        self.assertIn("const addSpeakerButton=document.getElementById('add-speaker-btn')", page)
+        self.assertIn('label=`Speaker ${Math.max(0,...speakerNumbers)+1}`', page)
+        self.assertNotIn("<title>未命名會議\n<script>", page)
+
     def test_download_endpoints_export_the_current_transcript(self) -> None:
         self.client.post(
             f"/meetings/{self.meeting_id}",

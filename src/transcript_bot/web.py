@@ -366,6 +366,7 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
         def render_editor(*, error: str | None = None):
             aliases = get_speaker_aliases(app.config["DATA_DIR"], meeting.id, meeting.user_id)
             display_transcript_text = apply_speaker_aliases(meeting.transcript_text, aliases)
+            segments = get_meeting_segments(app.config["DATA_DIR"], meeting.id, meeting.user_id)
             active_tab = request.args.get("tab", "transcript")
             active_tab = active_tab if active_tab in {"transcript", "summary", "notes"} else "transcript"
             summary = _deserialize_summary(meeting.summary_text)
@@ -377,12 +378,24 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
             # Stable sort by speaker number
             import re as _re
             labels.sort(key=lambda s: int(_re.search(r'\d+', s).group()) if _re.search(r'\d+', s) else 999)
+            speaker_groups: list[dict[str, object]] = []
+            for label in labels:
+                name = aliases.get(label, label)
+                group = next((item for item in speaker_groups if item["name"] == name), None)
+                if group is None:
+                    group = {"name": name, "labels": [], "start": None}
+                    speaker_groups.append(group)
+                group["labels"].append(label)
+            for group in speaker_groups:
+                first_segment = next(((index, segment) for index, segment in enumerate(segments, 1) if segment.speaker in group["labels"]), None)
+                group["sequence"] = first_segment[0] if first_segment else None
             return render_template(
                 "edit_meeting.html",
                 meeting=meeting,
                 sidebar_meetings=meetings_for_request(),
-                segments=get_meeting_segments(app.config["DATA_DIR"], meeting.id, meeting.user_id),
+                segments=segments,
                 speaker_labels=labels,
+                speaker_groups=speaker_groups,
                 aliases=aliases,
                 display_transcript_text=display_transcript_text,
                 summary=summary,

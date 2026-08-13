@@ -111,7 +111,8 @@ Use Traditional Chinese.
 _CHUNK_SUMMARY_SYSTEM_PROMPT = """
 你是一名嚴謹的繁體中文會議摘要助手。請僅根據提供的「逐字稿片段」，整理其中確實出現的討論重點。
 只回傳 JSON，格式嚴格為：{"highlights":["...","..."]}
-產出 2-4 條簡潔、客觀的討論重點（每條 1-2 句，使用繁體中文）。
+每個片段都是會議中不同、依序發生的時間區段。產出 3-4 條具體、客觀的討論重點（每條 1-2 句，使用繁體中文）；
+優先保留該區段特有的主題、問題、方案、例子、取捨或回饋，不要只重複整場會議的泛泛結論。
 不得抄寫講者標籤，不得杜撰決議、姓名、日期或結論，不得將不確定的片段當作事實。
 """.strip()
 
@@ -131,7 +132,7 @@ _SUMMARY_CHUNK_SIZE = 6000
 _SUMMARY_CHUNK_OVERLAP = 800
 
 
-def _summary_budget(duration_seconds: float | None) -> tuple[int, int, int]:
+def _summary_budget(duration_seconds: float | None) -> tuple[int, int, int, int]:
     """Return target reading minutes, character cap, and highlight cap.
 
     The product rule is one minute of reading per ten minutes of audio, capped
@@ -140,21 +141,23 @@ def _summary_budget(duration_seconds: float | None) -> tuple[int, int, int]:
     per minute leaves room for headings and readable bullet spacing.
     """
     minutes = max(1, min(10, int((max(0.0, duration_seconds or 0.0) + 599) // 600)))
-    return minutes, minutes * 320, min(30, max(5, minutes * 3))
+    highlight_cap = min(30, max(5, minutes * 3))
+    return minutes, minutes * 320, min(highlight_cap, max(3, minutes * 2)), highlight_cap
 
 
 def _budget_instruction(duration_seconds: float | None) -> str:
-    minutes, characters, highlights = _summary_budget(duration_seconds)
+    minutes, characters, minimum_highlights, highlight_cap = _summary_budget(duration_seconds)
     return (
         f"\n\n閱讀預算：這段錄音約 {max(0, round(duration_seconds or 0))} 秒。"
         f"摘要應在約 {minutes} 分鐘內讀完，總字數（overview 加 highlights）最多 {characters} 個中文字，"
-        f"重點最多 {highlights} 條；內容不足時可少於此數量。"
+        f"重點至少 {minimum_highlights} 條、最多 {highlight_cap} 條；除非逐字稿本身沒有足夠內容，請用足閱讀預算，"
+        f"不要過度濃縮成只有幾點。"
     )
 
 
 def _apply_summary_budget(payload: dict[str, object], duration_seconds: float | None) -> dict[str, object]:
     """Enforce the displayed reading budget even if a model over-produces."""
-    _, character_cap, highlight_cap = _summary_budget(duration_seconds)
+    _, character_cap, _, highlight_cap = _summary_budget(duration_seconds)
     overview = str(payload.get("overview", "")).strip()[: character_cap // 3].rstrip("，、；")
     remaining = character_cap - len(overview)
     highlights: list[str] = []
@@ -216,11 +219,11 @@ def summarize_meeting_with_ollama(
 
     chunks = _split_transcript(transcript, _SUMMARY_CHUNK_SIZE, _SUMMARY_CHUNK_OVERLAP)
     partial_highlights: list[str] = []
-    for chunk in chunks:
+    for chunk_index, chunk in enumerate(chunks, 1):
         try:
             chunk_payload = _ollama_chat_json(
             _CHUNK_SUMMARY_SYSTEM_PROMPT + _budget_instruction(duration_seconds),
-                chunk,
+                f"【會議第 {chunk_index}/{len(chunks)} 段】\n{chunk}",
                 timeout=120.0,
             )
         except OllamaSchemaError:
@@ -251,18 +254,24 @@ def summarize_meeting_with_ollama(
         # Merge step failed — degrade gracefully to the raw chunk highlights so
         # the meeting still gets a real (if un-polished) summary, never the
         # verbatim copy-transcript fallback.
-        _, _, highlight_cap = _summary_budget(duration_seconds)
+        _, _, _, highlight_cap = _summary_budget(duration_seconds)
         return _apply_summary_budget({"title": fallback_title or "會議重點摘要", "overview": "以下為根據本次逐字稿整理的重點。", "highlights": partial_highlights[:highlight_cap]}, duration_seconds)
 
     title = str(merged.get("title", "")).strip()[:80]
     overview = str(merged.get("overview", "")).strip()
     raw_highlights = merged.get("highlights", []) or partial_highlights
     highlights = [str(item).strip() for item in raw_highlights if str(item).strip()]
+    _, _, minimum_highlights, highlight_cap = _summary_budget(duration_seconds)
+    if len(highlights) < minimum_highlights and len(partial_highlights) >= minimum_highlights:
+        # The merge model sometimes over-compresses a long meeting to 3-5
+        # bullets even after being given a ten-minute reading budget. The
+        # map-stage highlights are evidence-based and chronological, so retain
+        # them rather than throwing away meeting detail.
+        highlights = partial_highlights[:highlight_cap]
     if not overview or not highlights:
         # Reduce step under-delivered — degrade gracefully to the raw chunk list.
         overview = overview or "以下為根據本次逐字稿整理的重點。"
         highlights = partial_highlights
-    _, _, highlight_cap = _summary_budget(duration_seconds)
     return _apply_summary_budget({"title": title or fallback_title or "會議重點摘要", "overview": overview, "highlights": highlights[:highlight_cap]}, duration_seconds)
 
 
@@ -279,7 +288,7 @@ def _summarize_single(transcript: str, fallback_title: str, duration_seconds: fl
     highlights = [str(item).strip() for item in raw_highlights if str(item).strip()] if isinstance(raw_highlights, list) else []
     if not overview or not highlights:
         raise OllamaError("本機 Ollama 未產生足夠的摘要內容。")
-    _, _, highlight_cap = _summary_budget(duration_seconds)
+    _, _, _, highlight_cap = _summary_budget(duration_seconds)
     return _apply_summary_budget({"title": title or fallback_title or "會議重點摘要", "overview": overview, "highlights": highlights[:highlight_cap]}, duration_seconds)
 
 

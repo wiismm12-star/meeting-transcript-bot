@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import unittest
@@ -196,7 +197,8 @@ class OllamaSummaryTests(unittest.TestCase):
         prompt = post.call_args.kwargs["json"]["messages"][0]["content"]
         self.assertIn("約 10 分鐘內讀完", prompt)
         self.assertIn("最多 3200 個中文字", prompt)
-        self.assertIn("重點最多 30 條", prompt)
+        self.assertIn("重點至少 20 條", prompt)
+        self.assertIn("最多 30 條", prompt)
 
     def test_schema_ignore_blob_raises_and_avoids_verbatim_fallback(self) -> None:
         # qwen3 over a long prompt sometimes echoes the transcript under a
@@ -255,6 +257,54 @@ class OllamaSummaryTests(unittest.TestCase):
             out = summarize_meeting_with_ollama(long_text, "預設會議")
         self.assertEqual(out["highlights"], ["分段重點A", "分段重點B"])
         self.assertEqual(out["title"], "預設會議")
+
+    def test_long_meeting_keeps_map_highlights_when_merge_is_too_short(self) -> None:
+        merge_response = _chat_response('{"title":"綜整會議","overview":"整場概述。","highlights":["過度濃縮的重點"]}')
+        chunk_number = 0
+
+        def _side_effect(*args, **kwargs):
+            nonlocal chunk_number
+            system = kwargs["json"]["messages"][0]["content"]
+            if "各段落" in system or "綜整" in system:
+                return merge_response
+            chunk_number += 1
+            start = (chunk_number - 1) * 4
+            highlights = [f"分段重點{index}" for index in range(start, start + 4)]
+            return _chat_response(json.dumps({"highlights": highlights}, ensure_ascii=False))
+
+        long_text = "Speaker 1：討論性別平等的重要議題。\n\n" * 2000
+        with (
+            patch("transcript_bot.ollama_client.settings", self.settings),
+            patch("transcript_bot.ollama_client.httpx.post", side_effect=_side_effect),
+        ):
+            out = summarize_meeting_with_ollama(long_text, "預設會議", duration_seconds=6000)
+
+        self.assertGreaterEqual(len(out["highlights"]), 20)
+        self.assertNotIn("過度濃縮的重點", out["highlights"])
+
+    def test_long_meeting_labels_each_map_chunk_in_sequence(self) -> None:
+        chunk_response = _chat_response('{"highlights":["分段重點"]}')
+        merge_response = _chat_response('{"title":"會議","overview":"概述。","highlights":["重點"]}')
+
+        def _side_effect(*args, **kwargs):
+            system = kwargs["json"]["messages"][0]["content"]
+            return merge_response if "各段落" in system or "綜整" in system else chunk_response
+
+        long_text = "Speaker 1：逐字稿內容。\n\n" * 1000
+        with (
+            patch("transcript_bot.ollama_client.settings", self.settings),
+            patch("transcript_bot.ollama_client.httpx.post", side_effect=_side_effect) as post,
+        ):
+            summarize_meeting_with_ollama(long_text, "預設會議", duration_seconds=6000)
+
+        chunk_inputs = [
+            call.kwargs["json"]["messages"][1]["content"]
+            for call in post.call_args_list
+            if "會議第" in call.kwargs["json"]["messages"][1]["content"]
+        ]
+        self.assertGreater(len(chunk_inputs), 1)
+        self.assertTrue(chunk_inputs[0].startswith("【會議第 1/"))
+        self.assertTrue(chunk_inputs[-1].startswith(f"【會議第 {len(chunk_inputs)}/"))
 
     def test_split_transcript_respects_chunk_size_and_overlap(self) -> None:
         blocks = ["甲" * 3000, "乙" * 3000, "丙" * 3000, "丁" * 3000]
