@@ -6,7 +6,7 @@
 
 ## 回報弱點
 
-請勿在公開 Issue 揭露 API Key、Token、音檔、逐字稿或可利用細節。請使用 GitHub 的 Private Vulnerability Reporting 功能，或在無法使用時以私密方式聯絡專案維護者。
+請勿在公開 Issue 揭露 API Key、Token、音檔、逐字稿或可利用細節。若儲存庫已啟用 GitHub Private Vulnerability Reporting，請透過該功能回報；否則先向維護者詢問私密回報管道，公開詢問時不要附上弱點細節。
 
 回報時請提供：
 
