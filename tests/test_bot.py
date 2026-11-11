@@ -115,6 +115,7 @@ class TelegramWebLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(bot.settings, "enable_polish", False),
                 patch("transcript_bot.bot._download_telegram_audio", fake_download),
                 patch("transcript_bot.bot.normalize_audio", fake_normalize),
+                patch("transcript_bot.bot.get_audio_duration", return_value=1.0),
                 patch("transcript_bot.bot.get_audio_duration", return_value=100.0),
                 patch("transcript_bot.bot.transcribe_audio_smart", fake_transcribe),
                 patch("transcript_bot.bot._generate_meeting_summary", return_value=MeetingSummary("測試會議", "摘要概覽", ["摘要重點"])),
@@ -172,6 +173,7 @@ class TelegramWebLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(bot.settings, "enable_polish", False),
                 patch("transcript_bot.bot._download_telegram_audio", fake_download),
                 patch("transcript_bot.bot.normalize_audio", fake_normalize),
+                patch("transcript_bot.bot.get_audio_duration", return_value=1.0),
                 patch("transcript_bot.bot.transcribe_audio_smart", return_value=[TranscriptSegment("SPEAKER_0", 0.0, 1.0, "確認時程")]),
                 patch("transcript_bot.bot._generate_meeting_summary", return_value=MeetingSummary("董事會", "確認後續安排。", ["確認時程。"])),
             ):
@@ -236,6 +238,7 @@ class TelegramWebLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(bot.settings, "data_dir", data_dir),
                 patch("transcript_bot.bot._download_telegram_audio", fake_download),
                 patch("transcript_bot.bot.normalize_audio", fake_normalize),
+                patch("transcript_bot.bot.get_audio_duration", return_value=1.0),
                 patch("transcript_bot.bot.transcribe_audio_smart", fake_transcribe),
             ):
                 task = asyncio.create_task(
