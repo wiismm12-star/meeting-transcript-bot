@@ -55,6 +55,26 @@ class LocalWebCorrectionTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
+    def test_failed_summary_regeneration_preserves_existing_summary(self) -> None:
+        from transcript_bot.database import update_meeting_summary_text
+        from transcript_bot.ollama_client import OllamaError
+        existing = json.dumps({"title": "Saved", "overview": "Overview", "highlights": ["Existing"]})
+        update_meeting_summary_text(self.data_dir, self.meeting_id, existing)
+        with patch("transcript_bot.web.summarize_meeting_with_ollama", side_effect=OllamaError("offline")):
+            response = self.client.post(f"/meetings/{self.meeting_id}", data={"form_action": "summary"})
+        self.assertIn("summary_error=1", response.location)
+        self.assertEqual(get_local_meeting_export(self.data_dir, self.meeting_id).summary_text, existing)
+
+    def test_summary_sections_render_without_losing_legacy_highlights(self) -> None:
+        from transcript_bot.database import update_meeting_summary_text
+        update_meeting_summary_text(self.data_dir, self.meeting_id, json.dumps({
+            "title": "Saved", "overview": "Overview", "highlights": ["Legacy item", "【決議】Confirmed", "【待辦】Task"]
+        }, ensure_ascii=False))
+        response = self.client.get(f"/meetings/{self.meeting_id}?tab=summary")
+        self.assertEqual(response.status_code, 200)
+        for text in ["Legacy item", "Confirmed", "Task", "已確認決議", "後續待辦"]:
+            self.assertIn(text.encode(), response.data)
+
     def test_index_lists_local_meetings(self) -> None:
         line_id = "line-meeting"
         web_id = "web-processing"

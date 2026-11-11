@@ -110,7 +110,7 @@ class OllamaPolishTests(unittest.TestCase):
 
         self.assertEqual(result, "Speaker 1：and a fragment")
 
-    def test_trims_only_a_dangling_prefix_and_ascii_tail(self) -> None:
+    def test_keeps_uncertain_prefix_and_ascii_tail_without_guessing(self) -> None:
         dangling = chr(0x7684) + chr(0x6b4c) + chr(0x624b)
         response = MagicMock(status_code=200)
         response.json.return_value = {"message": {"content": dangling + ", t " + chr(0x4f60)}}
@@ -121,9 +121,9 @@ class OllamaPolishTests(unittest.TestCase):
         ):
             result = polish_with_ollama("Speaker 1: " + dangling + ", t " + chr(0x4f60))
 
-        self.assertEqual(result, "Speaker 1：" + chr(0x6b4c) + chr(0x624b))
+        self.assertEqual(result, "Speaker 1：" + dangling + ", t " + chr(0x4f60))
 
-    def test_trims_ascii_tail_without_a_preceding_comma(self) -> None:
+    def test_keeps_ascii_tail_without_a_preceding_comma(self) -> None:
         text = chr(0x62cd) + chr(0x7167) + "t" + chr(0x4f60)
         response = MagicMock(status_code=200)
         response.json.return_value = {"message": {"content": text}}
@@ -134,7 +134,7 @@ class OllamaPolishTests(unittest.TestCase):
         ):
             result = polish_with_ollama("Speaker 1: " + text)
 
-        self.assertEqual(result, "Speaker 1：" + chr(0x62cd) + chr(0x7167))
+        self.assertEqual(result, "Speaker 1：" + text)
 
     def test_repairs_utf8_decoded_as_latin1_display_text(self) -> None:
         mojibake_colon = b"\xef\xbc\x9a".decode("latin-1")

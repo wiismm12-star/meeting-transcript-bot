@@ -49,7 +49,6 @@ from transcript_bot.formatting import (
     polish_local_transcript,
     polish_transcript,
     MeetingSummary,
-    build_fallback_meeting_summary,
     render_plain_transcript,
     split_segments_by_sentences,
 )
@@ -400,6 +399,7 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
                 aliases=aliases,
                 display_transcript_text=display_transcript_text,
                 summary=summary,
+                summary_failed=bool((get_job_status(app.config["DATA_DIR"], meeting.id) or {}).get("summary_failed")),
                 active_tab=active_tab,
                 audio_available=get_local_meeting_audio_path(app.config["DATA_DIR"], meeting.id) is not None,
                 saved=request.args.get("saved") == "1",
@@ -413,10 +413,17 @@ def create_web_app(data_dir: Path | None = None) -> Flask:
             if request.form.get("form_action") == "summary":
                 aliases = get_speaker_aliases(app.config["DATA_DIR"], meeting.id, meeting.user_id)
                 transcript_text = apply_speaker_aliases(meeting.transcript_text, aliases)
-                summary = _generate_meeting_summary(
-                    transcript_text, meeting.title, _meeting_duration_seconds(app.config["DATA_DIR"], meeting)
-                )
+                try:
+                    summary = _generate_meeting_summary(
+                        transcript_text, meeting.title, _meeting_duration_seconds(app.config["DATA_DIR"], meeting)
+                    )
+                except OllamaError:
+                    return redirect(url_for("edit_meeting", meeting_id=meeting.id, tab="summary", summary_error="1"))
                 update_meeting_summary_text(app.config["DATA_DIR"], meeting.id, _serialize_summary(summary))
+                status = get_job_status(app.config["DATA_DIR"], meeting.id)
+                if status and status.get("summary_failed"):
+                    status.pop("summary_failed", None)
+                    write_job_status(app.config["DATA_DIR"], meeting.id, **status)
                 return redirect(url_for("edit_meeting", meeting_id=meeting.id, tab="summary"))
 
             if request.form.get("form_action") == "segment":
@@ -824,6 +831,7 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
     """Background thread with progress tracking: normalize → transcribe → polish → save."""
     job_id = paths.job_id
     succeeded = False
+    summary_failed = False
     meeting = get_local_meeting_export(Path(data_dir), job_id)
     is_line_job = bool(meeting and meeting.user_id and meeting.user_id != 0 and get_job_status(Path(data_dir), job_id) and get_job_status(Path(data_dir), job_id).get("source") == "line")
 
@@ -871,6 +879,7 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
                 update_meeting_summary_text(data_dir, job_id, existing_meeting.summary_text)
                 update_meeting_metadata(data_dir, job_id, Path(original_filename).stem[:160], "")
                 _set_progress("done", 100, "done (完成)")
+                succeeded = True
                 return
 
         # Step 2: Transcribe with diarization (25 → 90%)
@@ -951,10 +960,16 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
         if cancel_event.is_set():
             return
         _set_progress("summarizing", 90, "summarizing (會議摘要)")
-        summary = _generate_meeting_summary(
-            transcript_text, Path(original_filename).stem[:160], duration
-        )
-        update_meeting_summary_text(data_dir, job_id, _serialize_summary(summary))
+        try:
+            summary = _generate_meeting_summary(
+                transcript_text, Path(original_filename).stem[:160], duration
+            )
+        except OllamaError:
+            # Transcription is already saved. A summary outage must not label
+            # the recording as failed or require another paid transcription.
+            summary_failed = True
+        else:
+            update_meeting_summary_text(data_dir, job_id, _serialize_summary(summary))
 
         _set_progress("done", 100, "done (完成)")
         succeeded = True
@@ -972,12 +987,13 @@ def _process_job(data_dir: str, paths, original_filename: str, cancel_event: thr
                 Path(data_dir), job_id, source="web", step="error", pct=0, label=label
             )
     finally:
-        if is_line_job:
+        if is_line_job or succeeded:
             write_job_status(
-                Path(data_dir), job_id, source="line",
+                Path(data_dir), job_id, source="line" if is_line_job else "web",
                 step="done" if succeeded else ("cancelled" if cancel_event.is_set() else "error"),
                 pct=100 if succeeded else 0,
                 label="done (完成)" if succeeded else "error (轉錄失敗或已取消)",
+                summary_failed=summary_failed,
             )
         _notify_line_completion(job_id, succeeded=succeeded, data_dir=Path(data_dir))
         _active_jobs.pop(job_id, None)
@@ -1094,16 +1110,13 @@ def _meeting_duration_seconds(data_dir: Path, meeting: object) -> float:
 def _generate_meeting_summary(
     transcript: str, meeting_title: str, duration_seconds: float | None = None
 ) -> MeetingSummary:
-    """Use the local model when available, with a no-network readable fallback."""
-    try:
-        payload = summarize_meeting_with_ollama(transcript, meeting_title, duration_seconds)
-        return MeetingSummary(
-            title=str(payload["title"]),
-            overview=str(payload["overview"]),
-            highlights=[str(item) for item in payload["highlights"]],
-        )
-    except OllamaError:
-        return build_fallback_meeting_summary(transcript, meeting_title)
+    """Generate a validated summary; callers handle failures without losing text."""
+    payload = summarize_meeting_with_ollama(transcript, meeting_title, duration_seconds)
+    return MeetingSummary(
+        title=str(payload["title"]),
+        overview=str(payload["overview"]),
+        highlights=[str(item) for item in payload["highlights"]],
+    )
 
 
 def _serialize_summary(summary: MeetingSummary) -> str:

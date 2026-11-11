@@ -120,6 +120,7 @@ class SmartTranscribeMergeTests(unittest.TestCase):
             chunks_dir = Path(temp_dir) / "chunks"
             duration = 1300.0
             with (
+                patch("transcript_bot.config.settings.transcribe_provider", "whisper"),
                 patch("transcript_bot.audio.get_audio_duration", return_value=duration),
                 patch("transcript_bot.config.settings.chunk_max_seconds", 600),
                 patch("transcript_bot.audio._detect_silences", return_value=[]),
