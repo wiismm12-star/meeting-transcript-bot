@@ -39,8 +39,8 @@ class WatchdogTests(unittest.TestCase):
             os.utime(page, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
             second = watchdog.source_snapshot(root)
 
-        self.assertIn("src\\transcript_bot\\templates\\index.html", first)
-        self.assertNotIn("src\\transcript_bot\\templates\\notes.txt", first)
+        self.assertIn(str(Path("src") / "transcript_bot" / "templates" / "index.html"), first)
+        self.assertNotIn(str(Path("src") / "transcript_bot" / "templates" / "notes.txt"), first)
         self.assertNotEqual(first, second)
 
     def test_process_cleanup_is_started_without_a_console_window(self) -> None:

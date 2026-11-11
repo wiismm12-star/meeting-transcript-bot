@@ -9,6 +9,7 @@ description = "Telegram bot MVP for meeting transcription with speaker diarizati
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "numpy>=1.26.0",
     "httpx>=0.28.0",
     "openai>=1.99.0",
     "opencc-python-reimplemented>=0.1.7",

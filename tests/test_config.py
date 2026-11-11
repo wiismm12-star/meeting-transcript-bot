@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pydantic import ValidationError
 
 from transcript_bot.config import Settings
 
@@ -22,3 +23,13 @@ class SettingsValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "TRANSCRIBE_PROVIDER"):
             settings.validate_runtime()
+
+    def test_optional_telegram_api_id_accepts_blank(self):
+        for value in ("", "  ", None):
+            with self.subTest(value=value):
+                self.assertIsNone(Settings(_env_file=None, telegram_api_id=value).telegram_api_id)
+        self.assertEqual(Settings(_env_file=None, telegram_api_id="123").telegram_api_id, 123)
+
+    def test_optional_telegram_api_id_rejects_invalid_nonblank(self):
+        with self.assertRaises(ValidationError):
+            Settings(_env_file=None, telegram_api_id="invalid")

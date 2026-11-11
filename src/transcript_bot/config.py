@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from pydantic import field_validator
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -91,6 +93,11 @@ class Settings(BaseSettings):
     glossary_file: Path = Path("./data/glossary.txt")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    @field_validator("telegram_api_id", mode="before")
+    @classmethod
+    def empty_telegram_api_id(cls, value):
+        return None if isinstance(value, str) and not value.strip() else value
 
     @property
     def max_audio_bytes(self) -> int:

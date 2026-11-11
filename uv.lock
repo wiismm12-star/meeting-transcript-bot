@@ -1574,6 +1574,8 @@ source = { editable = "." }
 dependencies = [
     { name = "flask" },
     { name = "httpx" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "openai" },
     { name = "opencc-python-reimplemented" },
     { name = "pydantic-settings" },
@@ -1595,6 +1597,7 @@ requires-dist = [
     { name = "faster-whisper", marker = "extra == 'whisper'", specifier = ">=1.2.0" },
     { name = "flask", specifier = ">=3.0.0" },
     { name = "httpx", specifier = ">=0.28.0" },
+    { name = "numpy", specifier = ">=1.26.0" },
     { name = "openai", specifier = ">=1.99.0" },
     { name = "opencc-python-reimplemented", specifier = ">=0.1.7" },
     { name = "pyannote-audio", marker = "extra == 'pyannote'", specifier = ">=4.0.0" },
